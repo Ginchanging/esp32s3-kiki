@@ -1,0 +1,253 @@
+{
+  "schema": 1,
+  "generated_at": 1794543300,
+  "github": {
+    "repo": "ISBF-Lab/ISBFweb",
+    "fetched_at": 1794544160,
+    "runs": [
+      {
+        "id": 4,
+        "workflow": "ISBF frontend consistency",
+        "branch": "codex/mbti-zcw-93",
+        "run_number": 148,
+        "status": "completed",
+        "conclusion": "success",
+        "duration_s": 1794,
+        "updated_at": 1794543300
+      },
+      {
+        "id": 3,
+        "workflow": "MBTI workbench integration",
+        "branch": "codex/mbti-zcw-93",
+        "run_number": 22,
+        "status": "completed",
+        "conclusion": "success",
+        "duration_s": 14525,
+        "updated_at": 1794540200
+      },
+      {
+        "id": 2,
+        "workflow": "Alumni identity integration boundary",
+        "branch": "main",
+        "run_number": 66,
+        "status": "completed",
+        "conclusion": "success",
+        "duration_s": 31,
+        "updated_at": 1794494200
+      },
+      {
+        "id": 1,
+        "workflow": "Developer Docs Lint",
+        "branch": "main",
+        "run_number": 310,
+        "status": "completed",
+        "conclusion": "failure",
+        "duration_s": 95,
+        "updated_at": 1794454200
+      }
+    ],
+    "contrib": {
+      "user": "Ginchanging",
+      "levels": "101300201302000110002103003330331000201102031230033301024030302321412321104044003122142130021041021030423",
+      "week": 23,
+      "today": 4
+    }
+  },
+  "servers": [
+    {
+      "name": "aliyun-hub",
+      "online": true,
+      "reported_at": 1794544195,
+      "cpu_pct": 7.5,
+      "mem_pct": 41.2,
+      "disk_pct": 34,
+      "load1": 0.12,
+      "uptime_s": 1234567,
+      "services": [
+        {
+          "name": "feishu-bot",
+          "ok": true
+        },
+        {
+          "name": "esp-dash",
+          "ok": true
+        }
+      ],
+      "cpu_hist": [
+        1,
+        7,
+        9,
+        8,
+        11,
+        10,
+        8,
+        4,
+        2,
+        1,
+        1,
+        1,
+        6,
+        2,
+        1,
+        3,
+        1,
+        1,
+        1,
+        5,
+        1,
+        6,
+        9,
+        13,
+        10,
+        5,
+        7,
+        8,
+        4,
+        10,
+        9,
+        7,
+        10,
+        14,
+        13,
+        7,
+        10,
+        9,
+        14,
+        14,
+        11,
+        6,
+        11,
+        10,
+        11,
+        7,
+        11,
+        11,
+        16,
+        17,
+        13,
+        12,
+        9,
+        6,
+        9,
+        11,
+        10,
+        7,
+        6,
+        8
+      ]
+    },
+    {
+      "name": "gcp-isbf",
+      "online": true,
+      "reported_at": 1794544188,
+      "cpu_pct": 23.4,
+      "mem_pct": 41.6,
+      "disk_pct": 43,
+      "load1": 0.9,
+      "uptime_s": 2000000,
+      "services": [
+        {
+          "name": "isbf-app",
+          "ok": true
+        },
+        {
+          "name": "caddy",
+          "ok": true
+        },
+        {
+          "name": "docker",
+          "ok": true
+        }
+      ],
+      "cpu_hist": [
+        17,
+        19,
+        14,
+        14,
+        17,
+        18,
+        17,
+        15,
+        18,
+        18,
+        18,
+        15,
+        11,
+        12,
+        10,
+        8,
+        12,
+        8,
+        2,
+        7,
+        6,
+        8,
+        5,
+        2,
+        5,
+        5,
+        6,
+        4,
+        7,
+        7,
+        11,
+        15,
+        10,
+        15,
+        13,
+        15,
+        14,
+        12,
+        16,
+        21,
+        17,
+        16,
+        19,
+        23,
+        28,
+        28,
+        23,
+        28,
+        33,
+        34,
+        33,
+        33,
+        36,
+        33,
+        29,
+        34,
+        30,
+        34,
+        36,
+        40
+      ]
+    },
+    {
+      "name": "aliyun-codex",
+      "online": false,
+      "reported_at": 0
+    }
+  ],
+  "events": [
+    {
+      "id": 1794543300000,
+      "kind": "run_succeeded",
+      "subject": "ISBF frontend consistency #148"
+    }
+  ],
+  "_sim": {
+    "now": 1794544200,
+    "net": "online",
+    "muse": [
+      {
+        "ts": 1794543600,
+        "text": "该去吃午饭了，下午两点还有课。"
+      },
+      {
+        "ts": 1794537000,
+        "text": "提醒：明天上午九点交实验报告。"
+      }
+    ],
+    "fetch_failures": 1
+  }
+}

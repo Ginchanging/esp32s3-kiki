@@ -1,0 +1,26 @@
+# Minimal Home Assistant for the Kiki dashboard: only what the official
+# Xiaomi Home integration and the local REST API need. No default_config
+# (it would start bluetooth/dhcp/ssdp/cloud etc. on a headless server).
+homeassistant:
+  name: Kiki Home
+  country: CN
+  time_zone: Asia/Shanghai
+  unit_system: metric
+  currency: CNY
+
+# Listen on localhost only; reach the UI with: ssh -L 8123:127.0.0.1:8123 esp-hub
+http:
+  server_host: 127.0.0.1
+  server_port: 8123
+
+frontend:
+config:
+api:
+webhook:      # Xiaomi OAuth lands on /api/webhook/<id>
+logger:
+  default: warning
+
+# Keep the database small: states only, three days.
+recorder:
+  purge_keep_days: 3
+  commit_interval: 30

@@ -1,0 +1,44 @@
+# ── Build output ───────────────────────────────────────────
+/build/
+/build-sim/
+/managed_components/
+/dependencies.lock
+
+# Generated from sdkconfig.defaults by idf.py
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.windows-original
+
+# ── Generated / large local files ─────────────────────────
+# Simulator screenshots: regenerate with ./esp.sh shots
+/shots/
+# Noto Sans SC sources + char lists for ./scripts/gen_fonts.sh (~16 MB)
+/tools/fonts/
+# One-off captures: ./esp.sh mirror --shot x.ppm, dash_sim --shot x.bmp
+/*.ppm
+/*.bmp
+# Original board flash dump and the original project archive
+/.flash-backup/
+/ESPdevNet.zip
+
+# ── Secrets: never commit ──────────────────────────────────
+/server/secrets/
+*.key
+.env
+.env.*
+ha_token
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+
+# ── Editors / OS ───────────────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+.cache/
+.clangd
+compile_commands.json
+*.swp
+*~

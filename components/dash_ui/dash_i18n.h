@@ -1,0 +1,87 @@
+/* UI strings in English and Simplified Chinese. scripts/gen_fonts.sh scans
+ * dash_i18n.c, so every Chinese character used here gets into the fonts. */
+#pragma once
+
+#include "dash_model.h"
+
+typedef enum {
+    S_LIVE,
+    S_STALE,
+    S_OFFLINE,
+    S_NO_DATA,
+    S_NET_ONLINE,
+    S_NET_CONNECTING,
+    S_NET_DOWN,
+    S_NET_BOOTING,
+    S_TEMP,
+    S_HUMIDITY,
+    S_SENSOR_NONE,
+    S_SERVERS_UP_FMT, /* "%d/%d" placeholders */
+    S_GITHUB,
+    S_SERVERS,
+    S_MUSE_NONE,
+    S_MUSE_NOT_SET,
+    S_GH_TITLE,
+    S_RUN_SUCCESS,
+    S_RUN_FAILED,
+    S_RUN_RUNNING,
+    S_RUN_QUEUED,
+    S_RUN_CANCELLED,
+    S_RUN_SKIPPED,
+    S_RUN_UNKNOWN,
+    S_RECENT,
+    S_NO_RUNS,
+    S_SRV_TITLE,
+    S_CPU,
+    S_MEM,
+    S_DISK,
+    S_UPTIME,
+    S_NOT_CONNECTED,
+    S_LAST_SEEN_FMT, /* "%s" = "3m ago" */
+    S_MUSE_TITLE,
+    S_MUSE_POPUP,
+    S_EVT_RUN_FAILED,
+    S_EVT_RUN_SUCCEEDED,
+    S_EVT_SERVER_DOWN,
+    S_EVT_SERVER_UP,
+    S_EVT_OTHER,
+    S_LANG_SWITCH, /* label of the button that switches to the OTHER language */
+    S_EVT_RUN_STARTED,
+    /* Kiki's speech bubble: one line per routine activity (same order as dash_activity_t) */
+    S_ACT_SLEEP, S_ACT_EXERCISE, S_ACT_BREAKFAST, S_ACT_CLASS, S_ACT_LUNCH, S_ACT_NAP,
+    S_ACT_CODE, S_ACT_DINNER, S_ACT_FREE, S_ACT_WASH, S_ACT_SUNBATHE,
+    /* short activity names for "next: ..." */
+    S_ACTN_SLEEP, S_ACTN_EXERCISE, S_ACTN_BREAKFAST, S_ACTN_CLASS, S_ACTN_LUNCH, S_ACTN_NAP,
+    S_ACTN_CODE, S_ACTN_DINNER, S_ACTN_FREE, S_ACTN_WASH, S_ACTN_SUNBATHE,
+    S_MOOD_WORRIED_FMT, S_MOOD_NERVOUS_FMT, S_MOOD_STALE, S_MOOD_NO_NET,
+    S_REACT_CI_PASS_FMT, S_REACT_CI_FAIL_FMT, S_REACT_CI_START_FMT, S_REACT_SERVER_UP_FMT,
+    S_REACT_SERVER_DOWN_FMT, S_REACT_MORNING, S_REACT_POMO_DONE, S_REACT_POMO_START, S_REACT_POMO_PAUSE,
+    S_TOUCH_CI_FMT, S_TOUCH_SERVERS_FMT, S_TOUCH_NEXT_FMT, S_TOUCH_HINT, S_TOUCH_MEOW,
+    S_POMO_TITLE, S_POMO_START, S_POMO_PAUSE, S_POMO_RESUME, S_POMO_RESET,
+    S_POMO_FOCUS, S_POMO_BREAK, S_POMO_IDLE, S_POMO_PAUSED, S_POMO_TODAY_FMT,
+    S_HEAT_WEEK, S_HEAT_TODAY, S_HEAT_NONE, S_HEAT_TITLE,
+    S_CPU_HOUR,
+    S_AGENT_DONE_FMT, S_AGENT_ATTN_FMT, S_AGENT_ERR_FMT, S_AGENT_INFO_FMT,
+    /* Mi Home page */
+    S_MI_TITLE, S_MI_LINKED, S_MI_LOST, S_MI_NONE, S_MI_ON, S_MI_OFF, S_MI_BRI_FMT, S_MI_IS_ON,
+    S_MI_IS_OFF, S_MI_OFFLINE, S_MI_FAILED, S_MI_LEFT_FMT, S_MI_POPUP, S_MI_WASHER_DONE, S_MI_DONE_FMT,
+    /* washer states, same order as dash_mi_state_t */
+    S_MI_ST_OTHER, S_MI_ST_IDLE, S_MI_ST_WASH, S_MI_ST_RINSE, S_MI_ST_SPIN, S_MI_ST_DRY, S_MI_ST_DONE,
+    S_MI_ST_PAUSE, S_MI_ST_FAULT, S_MI_ST_OFF, S_MI_ST_HEAT, S_MI_ST_POUR, S_MI_ST_CLEAN,
+    /* water dispenser + scale cards */
+    S_MI_FILTER_FMT, S_MI_FILTER1_FMT, S_MI_WEIGH_TODAY, S_MI_WEIGH_YDAY, S_MI_WEIGH_DAYS_FMT,
+    S_MI_WEIGH_NEVER, S_MI_WEIGH_WHEN_FMT, S_MI_WEIGH_30_FMT,
+    /* rotary knob toasts */
+    S_KNOB_NO_LAMP, S_KNOB_LAMP_FMT, S_KNOB_POMO_FMT,
+    /* Kiki's diary (mailbox source "Kiki") */
+    S_DIARY_TAG, S_WEEKLY_TAG, S_DIARY_TITLE_FMT, S_DIARY_TODAY, S_DIARY_WEEK, S_DIARY_SEP, S_DIARY_END,
+    S_DIARY_POMO_FMT, S_DIARY_POMO_H_FMT, S_DIARY_COMMITS_FMT, S_DIARY_CI_FMT, S_DIARY_WASH_FMT,
+    S_DIARY_DOWN_FMT, S_DIARY_BEST_FMT, S_DIARY_WEIGHT_FMT, S_DIARY_NOTHING,
+    S_DIARY_END_HARD, S_DIARY_END_CI, S_DIARY_END_DOWN, S_DIARY_END_REST, S_DIARY_END_OK, S_DIARY_END_WEEK,
+    S_WD_SUN, S_WD_MON, S_WD_TUE, S_WD_WED, S_WD_THU, S_WD_FRI, S_WD_SAT,
+    S_COUNT
+} dash_str_t;
+
+void dash_i18n_set(dash_lang_t lang);
+dash_lang_t dash_i18n_get(void);
+const char *dash_tr(dash_str_t id);

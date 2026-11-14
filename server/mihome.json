@@ -1,0 +1,14 @@
+{
+  "devices": [
+    {"id": "lamp", "kind": "lamp", "name_zh": "屏幕挂灯", "name_en": "Monitor light", "entity": "light.yeelink_cn_2029431469_lamp43_s_2_light"},
+    {"id": "washer", "kind": "washer", "name_zh": "洗衣机", "name_en": "Washer", "status": "sensor.mibx5_cn_2177778255_f90_status_p_2_2",
+     "stage": "sensor.mibx5_cn_2177778255_f90_run_status_p_2_11",
+     "left": "sensor.mibx5_cn_2177778255_f90_left_time_p_2_10",
+     "end_event": "event.mibx5_cn_2177778255_f90_wash_end_e_2_1",
+     "states": {"未运行": "other", "称重中": "wash", "蒸汽除菌": "wash", "等待吹风抖散": "dry", "吹风抖散": "dry", "衣物护理": "dry", "洗衣结束": "done"}},
+    {"id": "water", "kind": "dispenser", "name_zh": "饮水机", "name_en": "Water", "status": "sensor.xiaomi_cn_918698106_tsa2p_status_p_2_3",
+     "temp": "sensor.xiaomi_cn_918698106_tsa2p_temperature_p_2_5",
+     "tds": "sensor.xiaomi_cn_918698106_tsa2p_tds_out_p_3_2",
+     "filters": ["sensor.xiaomi_cn_918698106_tsa2p_filter_life_level_p_5_1", "sensor.xiaomi_cn_918698106_tsa2p_filter_life_level_p_8_1"]}
+  ]
+}

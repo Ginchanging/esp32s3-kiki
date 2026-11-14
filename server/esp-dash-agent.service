@@ -1,0 +1,30 @@
+[Unit]
+Description=ESP32 desk dashboard agent (pushes this server's status to the hub)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I /opt/esp-dash/dashd.py agent
+# AGENT_NAME and SERVICES are filled in by deploy.sh
+Environment=AGENT_NAME=@AGENT_NAME@
+Environment="SERVICES=@SERVICES@"
+Environment=HUB_URL=https://8.138.138.222:8443
+Environment=PERIOD=30
+LoadCredential=hub.pem:/etc/esp-dash/hub.pem
+LoadCredential=agent_token:/etc/esp-dash/agent_token
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=64M
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
