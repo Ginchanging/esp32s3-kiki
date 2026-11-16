@@ -347,6 +347,8 @@ bool app_cmd_handle(char *line)
                st->health.fetched_at ? (long long)(now-st->health.fetched_at) : -1LL,
                (unsigned)sizeof(st->health));
         app_unlock(false);
+        app_sensor_print_status(P);
+        app_led_print_status(P);
         return true;
     }
     return false;

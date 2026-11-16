@@ -6,6 +6,7 @@
  *   muse task   : Muse alerts over Bemfa MQTT
  *   led task    : status LED
  *   knob task   : EC11 rotary knob (pages, lamp, pomodoro)
+ *   sensor task : SHT3x temperature/humidity on a separate I2C bus (GPIO13/14)
  */
 #include <stdio.h>
 #include <string.h>
@@ -92,4 +93,5 @@ void app_main(void)
     xTaskCreatePinnedToCore(muse_task, "muse", 4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(led_task, "led", 3072, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(knob_task, "knob", 3072, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(sensor_task, "sensor", 3072, NULL, 2, NULL, 1);
 }

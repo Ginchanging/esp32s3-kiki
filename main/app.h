@@ -100,6 +100,9 @@ void app_ota_print_status(const char *prefix);
 void muse_task(void *arg);
 void led_task(void *arg);
 void knob_task(void *arg);
+void sensor_task(void *arg);
+void app_sensor_print_status(const char *prefix);
+void app_led_print_status(const char *prefix);
 
 /* Hub endpoint; the certificate is pinned (main/certs/hub.pem). */
 #define DASH_HUB_BASE "https://8.138.138.222:8443"
@@ -116,6 +119,14 @@ void knob_task(void *arg);
 #define AGENT_TOPIC "agentalert" /* github.com/Ginchanging/agent-bemfa-notify */
 
 #define LED_DEFAULT_GPIO 48
+/* KY-016 common cathode: photo order B / G / R / -, with - connected to GND. */
+#define RGB_GPIO_R 4
+#define RGB_GPIO_G 5
+#define RGB_GPIO_B 6
+
+/* Confirmed wiring 2026-11-16: separate I2C bus; touch stays on GPIO15/16. */
+#define SENSOR_GPIO_SDA 13
+#define SENSOR_GPIO_SCL 14
 
 /* 2.8" ILI9341V screen (SPI2) + FT6336G touch (I2C), on the 3V3/5Vin header; see README */
 #define LCD_GPIO_SCK 12

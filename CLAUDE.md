@@ -68,12 +68,15 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
 | ui | `app_ui.c` + `app_lcd.c` | The **only** task that touches LVGL and the panel. ILI9341 over SPI2 (40 MHz DMA, byte-swapped in place; the DMA-done ISR only gives a semaphore that `flush_wait_cb` takes), FT6336 polled over I2C, LEDC backlight on GPIO7. Also mirror streaming (`@F` RLE+base64 lines over USB) and a touch queue fed by `TOUCH`. Falls back to headless if SPI init fails |
 | fetch | `app_fetch.c` | Every 30 s, HTTPS GET of the hub's `/api/device/status`, with the hub cert pinned (`main/certs/hub.pem`). Also sends Mi Home taps (`app_request_mi`) as `POST /api/device/mi` |
 | muse | `app_muse.c` | Bemfa MQTT over TLS 9503. Topics `musealert` (Muse) and `agentalert` (AI-agent pushes from github.com/Ginchanging/agent-bemfa-notify). Per-topic replay dedupe, because Bemfa resends the last message on subscribe |
-| led | `app_led.c` | Onboard WS2812 via RMT. Rules are shared: `dash_led_pattern()` / `dash_led_color_ex()` in dash_model |
+| led | `app_led.c` | Onboard WS2812 via RMT + common-cathode KY-016 (R/G/B = GPIO4/5/6) via LEDC timer 1, channels 1/2/3; backlight keeps timer/channel 0. Rules are shared: `dash_led_pattern()` / `dash_led_color_ex()` in dash_model |
 | knob | `app_knob.c` | EC11 on GPIO 1/2/42: PCNT quadrature + polled button → `app_knob_push()` queue (the `KNOB` command feeds the same queue) → UI task → `dash_ui_knob()` |
+| sensor | `app_sensor.c` + `sht3x.c` | SHT3x single-shot read every 5 s on its own I2C controller, SDA GPIO13 / SCL GPIO14 (user-confirmed 2026-11-16), VCC 3V3. Touch stays on GPIO15/16. Probe 0x44/0x45; validate both CRCs; invalidate after 3 failed samples and retry. Updates existing `sensor_valid` / `temp_c` / `humidity` under the state mutex, never LVGL |
 
 - State lives in `app_state.c`: one `dash_state_t` behind a mutex (`app_lock`/`app_unlock`).
 - Other tasks request UI work through flags the UI task polls (lang, `CAT`, mirror, dirty). They never call LVGL.
 - The UI writes night/pomodoro status back into the state so the LED task can follow it.
+- SHT3x temperature/humidity appears in the existing home-page environment label. `./esp.sh dash` includes sensor freshness/errors and KY-016 PWM diagnostics. `LED 48|38|off` still configures only the onboard WS2812; the external KY-016 follows the same shared light rules independently.
+- Hardware validation 2026-11-16: OTA completed with boot verification; the user confirmed live temperature/humidity numbers on the home page and normal touch. KY-016 physical colours have not yet been visually verified.
 
 **Data.**
 - `dash_model_parse()` reads the hub JSON. The schema and the server side are in `server/dashd.py`:

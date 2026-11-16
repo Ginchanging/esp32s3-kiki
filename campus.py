@@ -186,6 +186,14 @@ def show_message(line):
     elif label == "health":
         status = "尚未接入" if fields.get("configured") != "1" else "缓存或连接中断" if fields.get("ok") != "1" or fields.get("error") == "1" else "已连接"
         print(f"  健康 {status} · 读取年龄 {fields.get('age', '-1')} 秒 · 数据模型 {fields.get('model_bytes', '?')} 字节", flush=True)
+    elif label == "sensor":
+        value = f"{fields.get('temp_c')} °C / {fields.get('humidity')}%" if fields.get("valid") == "1" else "暂无有效读数"
+        print(f"  温湿度 {value} · SDA {fields.get('sda')} / SCL {fields.get('scl')} · "
+              f"地址 {fields.get('addr')} · {fields.get('age')} 秒前 · 连续失败 {fields.get('failures')} 次 · {fields.get('err')}", flush=True)
+    elif label == "rgb":
+        status = "已就绪" if fields.get("ready") == "1" else "未就绪"
+        print(f"  外置 RGB {status} · R/G/B 引脚 {fields.get('r')}/{fields.get('g')}/{fields.get('b')} · "
+              f"PWM {fields.get('duty_r')}/{fields.get('duty_g')}/{fields.get('duty_b')}（0–255）", flush=True)
     elif label in ("token", "bemfa") and "saved" in fields:
         name = "Hub 设备令牌" if label == "token" else "巴法云 UID"
         print(f"{name}{'已写入板载闪存' if fields['saved'] == '1' else '写入失败 ' + fields.get('err', '')}。", flush=True)
