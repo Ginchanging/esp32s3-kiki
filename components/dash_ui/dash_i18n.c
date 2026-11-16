@@ -1,9 +1,48 @@
 #include "dash_i18n.h"
+#include <string.h>
 
 static dash_lang_t current = DASH_LANG_ZH;
 
 /* { English, 简体中文 } */
 static const char *const table[S_COUNT][2] = {
+    [S_OTA_TITLE] = {"A LITTLE UPGRADE", "Kiki 升级中"},
+    [S_OTA_DOWNLOAD] = {"Downloading", "正在下载"},
+    [S_OTA_VERIFY] = {"Checking the update", "正在校验更新"},
+    [S_OTA_RESTART] = {"Restarting in", "即将重新启动"},
+    [S_OTA_VALIDATE] = {"Checking everything", "正在检查状态"},
+    [S_OTA_SUCCESS] = {"Update complete!", "升级成功啦！"},
+    [S_OTA_FAILURE] = {"Update did not finish", "这次没有更新成功"},
+    [S_OTA_ROLLBACK] = {"Previous version restored", "已恢复到旧版本"},
+    [S_OTA_LEARN] = {"Learning new tricks~", "我在学新本领～"},
+    [S_OTA_BACK_SOON] = {"Be right back~", "马上回来～"},
+    [S_OTA_CHECKING] = {"I'm back! Let's check~", "我回来啦，检查一下～"},
+    [S_OTA_HAPPY] = {"All done! Meow~", "升级成功啦，喵～"},
+    [S_OTA_STAY] = {"Still here with you~", "没更新成，继续陪你～"},
+    [S_OTA_OLD] = {"Old version, same Kiki~", "先用旧版继续陪你～"},
+    [S_CAL_TITLE] = {"AGENDA", "日程"},
+    [S_CAL_ALL_DAY] = {"All day", "全天"},
+    [S_CAL_LOADING] = {"Loading...", "正在加载"},
+    [S_CAL_SETUP] = {"Not linked", "尚未接入"},
+    [S_CAL_SETUP_BODY] = {"Link your iCloud calendar to start.", "接入 iCloud 日历后，\n这里会显示你的安排。"},
+    [S_CAL_CACHED] = {"Cached", "上次数据"},
+    [S_CAL_EMPTY] = {"A little free time~", "这天没有安排，\n可以放松一下喵～"},
+    [S_CAL_FAILED] = {"Calendar update failed. Try again shortly.", "日历更新失败，\n稍后会自动重试。"},
+    [S_CAL_CLOCK] = {"Waiting for time", "等待校时"},
+    [S_CAL_UNTITLED] = {"Untitled event", "未命名日程"},
+    [S_CAL_CLOSE] = {"Tap to return", "轻点返回日程"},
+    [S_CAL_PREV] = {"Prev", "上一组"},
+    [S_CAL_NEXT] = {"Next", "下一组"},
+    [S_HOL_SPRING] = {"Spring Festival", "春节"},
+    [S_HOL_LANTERN] = {"Lantern Festival", "元宵"},
+    [S_HOL_DRAGON] = {"Dragon Boat Festival", "端午"},
+    [S_HOL_QIXI] = {"Qixi", "七夕"},
+    [S_HOL_CHONGYANG] = {"Double Ninth", "重阳"},
+    [S_HOL_SOLSTICE] = {"Winter Solstice", "冬至"},
+    [S_HOL_NATIONAL] = {"National Day", "国庆"},
+    [S_HOL_HALLOWEEN] = {"Halloween", "万圣节"},
+    [S_HOL_THANKSGIVING] = {"Thanksgiving", "感恩节"},
+    [S_HOL_CHRISTMAS] = {"Christmas", "圣诞节"},
+    [S_HOL_BIRTHDAY] = {"Happy birthday!", "生日快乐！"},
     [S_LIVE] = {"LIVE", "实时"},
     [S_STALE] = {"STALE", "数据过期"},
     [S_OFFLINE] = {"OFFLINE", "离线"},
@@ -55,8 +94,15 @@ static const char *const table[S_COUNT][2] = {
     [S_ACT_NAP] = {"Afternoon nap...", "午睡一会儿…"},
     [S_ACT_CODE] = {"Coding alongside you", "陪你一起写代码"},
     [S_ACT_DINNER] = {"Dinner time!", "晚饭时间到！"},
-    [S_ACT_FREE] = {"Free time! Yarn ball~", "自由时间，玩毛线球～"},
+    [S_ACT_FREE] = {"Taking it easy~", "歇一会儿～"},
     [S_ACT_WASH] = {"Washing up for bed", "洗漱一下，准备睡觉"},
+    [S_IDLE_SIT] = {"Just daydreaming~", "坐着发会儿呆～"},
+    [S_IDLE_WINDOW] = {"Looking outside~", "看看窗外～"},
+    [S_IDLE_LIE] = {"Resting my paws~", "趴一会儿，歇歇爪～"},
+    [S_IDLE_STRETCH] = {"A little stretch~", "伸个懒腰～"},
+    [S_IDLE_GROOM] = {"Tidying my paws~", "舔舔爪，理理毛～"},
+    [S_IDLE_YAWN] = {"A tiny yawn~", "打个小哈欠～"},
+    [S_IDLE_YARN] = {"A little yarn break~", "拨两下毛线球～"},
     [S_ACT_SUNBATHE] = {"Sunbathing on the sill", "在窗台晒太阳～"},
 
     [S_ACTN_SLEEP] = {"sleep", "睡觉"},
@@ -124,7 +170,8 @@ static const char *const table[S_COUNT][2] = {
     [S_MI_IS_OFF] = {"Off", "已关闭"},
     [S_MI_OFFLINE] = {"Offline", "离线"},
     [S_MI_FAILED] = {"Failed, try again", "操作失败，再试一次"},
-    [S_MI_LEFT_FMT] = {"%d min left", "剩 %d 分钟"},
+    [S_MI_ETA_FMT] = {"done by %s", "预计 %s 洗好"},
+    [S_MI_ETA_SOON] = {"almost done", "马上洗好"},
     [S_MI_POPUP] = {"Mi Home", "米家提醒"},
     [S_MI_WASHER_DONE] = {"Laundry's done - time to hang it up!", "洗好啦，记得晾衣服～"},
     [S_MI_DONE_FMT] = {"%s is done", "%s 完成了"},
@@ -152,6 +199,23 @@ static const char *const table[S_COUNT][2] = {
     [S_KNOB_NO_LAMP] = {"No lamp set up", "还没接入台灯"},
     [S_KNOB_LAMP_FMT] = {"%s  %s", "%s  %s"},
     [S_KNOB_POMO_FMT] = {"Pomodoro: %s", "番茄钟：%s"},
+    [S_FLIGHT_TITLE] = {"OVERHEAD", "头顶航班"},
+    [S_FLIGHT_WAIT] = {"Looking for aircraft...", "正在寻找附近航班…"},
+    [S_FLIGHT_NONE] = {"No aircraft within 20 km", "附近 20 公里暂无航班"},
+    [S_FLIGHT_DISABLED] = {"Set a location on the hub", "请在 hub 设置固定位置"},
+    [S_FLIGHT_LOST] = {"Flight connection lost", "航班连接中断"},
+    [S_FLIGHT_OLD] = {"Position data is stale", "航迹数据已过期"},
+    [S_FLIGHT_ROUTE_NONE] = {"Route pending", "航线待补全"},
+    [S_FLIGHT_REFERENCE] = {"Reference route", "参考航线"},
+    [S_FLIGHT_OVERHEAD] = {"A plane overhead!", "有飞机经过！"},
+    [S_FLIGHT_DEMO] = {"Flyover demo", "飞越演示"},
+    [S_FLIGHT_OPEN] = {"Tap to view flight", "点开查看航班"},
+    [S_FLIGHT_LOOK] = {"Look up! A plane~", "抬头看，有飞机～"},
+    [S_FLIGHT_PREV] = {"Previous", "上一架"},
+    [S_FLIGHT_NEXT] = {"Next", "下一架"},
+    [S_FLIGHT_PASSED] = {"Recently passed", "刚刚经过"},
+    [S_FLIGHT_UNKNOWN] = {"Unknown", "未知"},
+    [S_FLIGHT_UNCLASSIFIED] = {"Unclassified", "类型未确认"},
     [S_DIARY_TAG] = {"diary", "日记"},
     [S_WEEKLY_TAG] = {"weekly report", "周报"},
     [S_DIARY_TITLE_FMT] = {"Kiki's %s", "Kiki 的%s"},
@@ -200,4 +264,23 @@ const char *dash_tr(dash_str_t id)
     }
     const char *s = table[id][current];
     return s ? s : table[id][DASH_LANG_EN];
+}
+
+const char *dash_airport_city(const char *code, const char *fallback)
+{
+    static const struct { const char *code, *zh; } cities[] = {
+        {"ZUH", "珠海"}, {"SZX", "深圳"}, {"CAN", "广州"}, {"HKG", "香港"}, {"MFM", "澳门"},
+        {"PEK", "北京"}, {"PKX", "北京"}, {"SHA", "上海"}, {"PVG", "上海"}, {"CTU", "成都"},
+        {"TFU", "成都"}, {"CKG", "重庆"}, {"WUX", "无锡"}, {"TNA", "济南"}, {"NKG", "南京"},
+        {"HGH", "杭州"}, {"WUH", "武汉"}, {"CSX", "长沙"}, {"XIY", "西安"}, {"KMG", "昆明"},
+        {"XMN", "厦门"}, {"FOC", "福州"}, {"TAO", "青岛"}, {"TSN", "天津"}, {"DLC", "大连"},
+        {"SHE", "沈阳"}, {"CGO", "郑州"}, {"HAK", "海口"}, {"SYX", "三亚"}, {"TPE", "台北"},
+        {"SIN", "新加坡"}, {"BKK", "曼谷"}, {"NRT", "东京"}, {"HND", "东京"}, {"ICN", "首尔"},
+        {"LHR", "伦敦"}, {"CDG", "巴黎"}, {"FRA", "法兰克福"}, {"LAX", "洛杉矶"}, {"JFK", "纽约"},
+    };
+    if (current == DASH_LANG_ZH) {
+        for (size_t i = 0; i < sizeof(cities)/sizeof(cities[0]); ++i)
+            if (!strcmp(code, cities[i].code)) return cities[i].zh;
+    }
+    return fallback && fallback[0] ? fallback : code;
 }

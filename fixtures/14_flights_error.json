@@ -1,0 +1,423 @@
+{
+  "schema": 1,
+  "generated_at": 1794544180,
+  "github": {
+    "repo": "ISBF-Lab/ISBFweb",
+    "fetched_at": 1794544160,
+    "runs": [
+      {
+        "id": 4,
+        "workflow": "ISBF frontend consistency",
+        "branch": "codex/mbti-zcw-93",
+        "run_number": 148,
+        "status": "completed",
+        "conclusion": "success",
+        "duration_s": 1794,
+        "updated_at": 1794543300
+      },
+      {
+        "id": 3,
+        "workflow": "MBTI workbench integration",
+        "branch": "codex/mbti-zcw-93",
+        "run_number": 22,
+        "status": "completed",
+        "conclusion": "success",
+        "duration_s": 14525,
+        "updated_at": 1794540200
+      },
+      {
+        "id": 2,
+        "workflow": "Alumni identity integration boundary",
+        "branch": "main",
+        "run_number": 66,
+        "status": "completed",
+        "conclusion": "success",
+        "duration_s": 31,
+        "updated_at": 1794494200
+      },
+      {
+        "id": 1,
+        "workflow": "Developer Docs Lint",
+        "branch": "main",
+        "run_number": 310,
+        "status": "completed",
+        "conclusion": "failure",
+        "duration_s": 95,
+        "updated_at": 1794454200
+      }
+    ],
+    "contrib": {
+      "user": "Ginchanging",
+      "levels": "101300201302000110002103003330331000201102031230033301024030302321412321104044003122142130021041021030423",
+      "week": 23,
+      "today": 4
+    }
+  },
+  "servers": [
+    {
+      "name": "aliyun-hub",
+      "online": true,
+      "reported_at": 1794544195,
+      "cpu_pct": 7.5,
+      "mem_pct": 41.2,
+      "disk_pct": 34,
+      "load1": 0.12,
+      "uptime_s": 1234567,
+      "services": [
+        {
+          "name": "feishu-bot",
+          "ok": true
+        },
+        {
+          "name": "esp-dash",
+          "ok": true
+        }
+      ],
+      "cpu_hist": [
+        9,
+        13,
+        11,
+        9,
+        9,
+        13,
+        7,
+        3,
+        1,
+        3,
+        1,
+        3,
+        1,
+        2,
+        4,
+        3,
+        6,
+        11,
+        9,
+        14,
+        12,
+        14,
+        14,
+        10,
+        8,
+        11,
+        9,
+        14,
+        14,
+        10,
+        9,
+        6,
+        2,
+        1,
+        2,
+        4,
+        10,
+        12,
+        11,
+        8,
+        3,
+        1,
+        2,
+        1,
+        4,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1,
+        1,
+        5,
+        10,
+        12,
+        15,
+        14,
+        19,
+        24,
+        26
+      ]
+    },
+    {
+      "name": "gcp-isbf",
+      "online": true,
+      "reported_at": 1794544188,
+      "cpu_pct": 23.4,
+      "mem_pct": 41.6,
+      "disk_pct": 43,
+      "load1": 0.9,
+      "uptime_s": 2000000,
+      "services": [
+        {
+          "name": "isbf-app",
+          "ok": true
+        },
+        {
+          "name": "caddy",
+          "ok": true
+        },
+        {
+          "name": "docker",
+          "ok": true
+        }
+      ],
+      "cpu_hist": [
+        22,
+        21,
+        20,
+        19,
+        18,
+        15,
+        20,
+        20,
+        15,
+        16,
+        11,
+        12,
+        13,
+        18,
+        19,
+        14,
+        11,
+        9,
+        11,
+        16,
+        18,
+        17,
+        13,
+        13,
+        18,
+        18,
+        16,
+        12,
+        14,
+        17,
+        17,
+        19,
+        20,
+        16,
+        22,
+        20,
+        22,
+        27,
+        30,
+        28,
+        29,
+        25,
+        29,
+        29,
+        34,
+        32,
+        29,
+        29,
+        29,
+        31,
+        32,
+        36,
+        39,
+        35,
+        32,
+        31,
+        35,
+        31,
+        31,
+        34
+      ]
+    },
+    {
+      "name": "aliyun-codex",
+      "online": false,
+      "reported_at": 0
+    }
+  ],
+  "events": [
+    {
+      "id": 1794543300000,
+      "kind": "run_succeeded",
+      "subject": "ISBF frontend consistency #148"
+    }
+  ],
+  "_sim": {
+    "now": 1794544200,
+    "net": "online",
+    "muse": [
+      {
+        "ts": 1794543600,
+        "text": "该去吃午饭了，下午两点还有课。"
+      },
+      {
+        "ts": 1794537000,
+        "text": "提醒：明天上午九点交实验报告。"
+      }
+    ],
+    "pomo_week": [
+      [
+        6,
+        2,
+        50
+      ],
+      [
+        5,
+        0,
+        0
+      ],
+      [
+        4,
+        5,
+        125
+      ],
+      [
+        3,
+        3,
+        75
+      ],
+      [
+        2,
+        6,
+        150
+      ],
+      [
+        1,
+        4,
+        100
+      ],
+      [
+        0,
+        4,
+        100
+      ]
+    ]
+  },
+  "mihome": {
+    "ok": true,
+    "devices": [
+      {
+        "id": "lamp",
+        "kind": "lamp",
+        "name_zh": "台灯",
+        "name_en": "Lamp",
+        "online": true,
+        "on": true,
+        "bri": 60
+      },
+      {
+        "id": "washer",
+        "kind": "washer",
+        "name_zh": "洗衣机",
+        "name_en": "Washer",
+        "online": true,
+        "state": "spin",
+        "eta": 1794544920,
+        "pct": 70
+      },
+      {
+        "id": "water",
+        "kind": "dispenser",
+        "name_zh": "饮水机",
+        "name_en": "Water",
+        "online": true,
+        "state": "idle",
+        "temp": 28,
+        "tds": 4,
+        "filters": [
+          77,
+          93
+        ]
+      }
+    ]
+  },
+  "days": [
+    {
+      "d": "11-07",
+      "wd": 6,
+      "ci_ok": 1,
+      "ci_fail": 0,
+      "wash": 1,
+      "down": 0,
+      "commits": 2
+    },
+    {
+      "d": "11-08",
+      "wd": 0,
+      "ci_ok": 0,
+      "ci_fail": 0,
+      "wash": 0,
+      "down": 0,
+      "commits": 0
+    },
+    {
+      "d": "11-09",
+      "wd": 1,
+      "ci_ok": 4,
+      "ci_fail": 1,
+      "wash": 0,
+      "down": 0,
+      "commits": 7
+    },
+    {
+      "d": "11-10",
+      "wd": 2,
+      "ci_ok": 3,
+      "ci_fail": 0,
+      "wash": 1,
+      "down": 1,
+      "commits": 5
+    },
+    {
+      "d": "11-11",
+      "wd": 3,
+      "ci_ok": 6,
+      "ci_fail": 2,
+      "wash": 0,
+      "down": 0,
+      "commits": 9
+    },
+    {
+      "d": "11-12",
+      "wd": 4,
+      "ci_ok": 2,
+      "ci_fail": 0,
+      "wash": 0,
+      "down": 0,
+      "commits": 3
+    },
+    {
+      "d": "11-13",
+      "wd": 5,
+      "ci_ok": 3,
+      "ci_fail": 1,
+      "wash": 1,
+      "down": 0,
+      "commits": 4
+    }
+  ],
+  "flights": {
+    "schema": 1,
+    "configured": true,
+    "ok": false,
+    "source": "adsb.fi",
+    "place": "榕园",
+    "radius_m": 20000,
+    "alert_radius_m": 5000,
+    "fetched_at": 1794544198,
+    "aircraft": [
+      {
+        "hex": "780e08",
+        "callsign": "CSN8798",
+        "registration": "B-8076",
+        "model": "A320",
+        "flight": "CZ8798",
+        "airline": "China Southern",
+        "origin": "TNA",
+        "destination": "SZX",
+        "origin_city": "Jinan",
+        "destination_city": "Shenzhen",
+        "observed_at": 1794544198,
+        "distance_m": 3200,
+        "altitude_m": 10800,
+        "bearing": 65,
+        "heading": 90,
+        "eligible": true
+      }
+    ],
+    "events": []
+  }
+}

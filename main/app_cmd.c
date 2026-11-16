@@ -16,6 +16,10 @@
  *   MI <dev> on|off|bri <1..100>   Mi Home control through the hub (e.g. MI lamp on)
  *   KNOB cw|ccw [n] | hold cw|ccw [n] | press | long | release | rev
  *                         act like the EC11 knob (rev flips its direction, NVS dash/knob_rev)
+ *   LCD [inv|rgb|mx|my|tmx|tmy|txy | bl <0..100> | mhz <5..80> | reset]
+ *                         screen status, or toggle a per-module fix / set backlight or SPI clock
+ *                         (NVS dash/lcd_flags, lcd_bl, lcd_mhz; applied live by the UI task)
+ *   WIFIPS on|off         Wi-Fi modem-sleep (NVS dash/wifi_ps; off = steadier 3V3 for the screen)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -235,6 +239,59 @@ bool app_cmd_handle(char *line)
         printf(P "knob event=%s\n", line + 5);
         return true;
     }
+    if (!strcmp(line, "LCD") || !strncmp(line, "LCD ", 4)) {
+        const char *v = line[3] ? line + 4 : "";
+        static const struct {
+            const char *name;
+            uint32_t bit;
+        } opts[] = {LCD_FLAG_NAMES};
+        uint32_t flags = 0;
+        int n = 0;
+        esp_err_t err = ESP_OK;
+        app_nvs_get_u32("dash", "lcd_flags", &flags);
+        bool done = !*v;
+        for (size_t i = 0; !done && i < sizeof(opts) / sizeof(opts[0]); ++i) {
+            if (!strcmp(v, opts[i].name)) {
+                err = app_nvs_set_u32("dash", "lcd_flags", flags ^ opts[i].bit);
+                printf(P "lcd %s=%d saved=%d\n", v, !(flags & opts[i].bit), err == ESP_OK);
+                done = true;
+            }
+        }
+        if (done) {
+            /* status or a flag toggled */
+        } else if (sscanf(v, "bl %d", &n) == 1 && n >= 0 && n <= 100) {
+            err = app_nvs_set_u32("dash", "lcd_bl", (uint32_t)n);
+            printf(P "lcd bl=%d saved=%d\n", n, err == ESP_OK);
+        } else if (sscanf(v, "mhz %d", &n) == 1 && n >= LCD_MIN_MHZ && n <= LCD_MAX_MHZ) {
+            err = app_nvs_set_u32("dash", "lcd_mhz", (uint32_t)n);
+            printf(P "lcd mhz=%d saved=%d\n", n, err == ESP_OK);
+        } else if (!strcmp(v, "reset")) {
+            app_nvs_erase("dash", "lcd_flags");
+            app_nvs_erase("dash", "lcd_bl");
+            app_nvs_erase("dash", "lcd_mhz");
+            printf(P "lcd reset=1\n");
+        } else {
+            printf(P "lcd error=invalid_input\n");
+            return true;
+        }
+        if (*v) {
+            app_lcd_request_reload(); /* also re-probes the touch chip */
+        } else {
+            app_lcd_print_status(P);
+        }
+        return true;
+    }
+    if (!strncmp(line, "WIFIPS ", 7)) {
+        const char *v = line + 7;
+        if (strcmp(v, "on") && strcmp(v, "off")) {
+            printf(P "wifips error=invalid_input\n");
+            return true;
+        }
+        esp_err_t err = app_nvs_set_u32("dash", "wifi_ps", !strcmp(v, "on"));
+        app_wifi_ps_apply();
+        printf(P "wifips on=%d saved=%d\n", app_wifi_ps_on(), err == ESP_OK);
+        return true;
+    }
     if (!strncmp(line, "TOUCH ", 6)) {
         int x, y, p;
         if (sscanf(line + 6, "%d %d %d", &x, &y, &p) == 3) {
@@ -254,6 +311,7 @@ bool app_cmd_handle(char *line)
         return true;
     }
     if (!strcmp(line, "DASH")) {
+        app_ota_print_status(P);
         char tmp[80];
         bool token = app_nvs_get_str("dash", "token", tmp, sizeof(tmp)) == ESP_OK && tmp[0];
         bool uid = app_nvs_get_str("muse", "uid", tmp, sizeof(tmp)) == ESP_OK && tmp[0];
@@ -275,6 +333,15 @@ bool app_cmd_handle(char *line)
                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                (long long)(esp_timer_get_time() / 1000000));
+        printf(P "flights configured=%d ok=%d status=%d count=%d failures=%d age=%lld\n",
+               st->flights.configured, st->flights.ok, (int)dash_flights_status(&st->flights, now),
+               st->flights.count, st->flights.fetch_failures,
+               st->flights.fetched_at ? (long long)(now-st->flights.fetched_at) : -1LL);
+        printf(P "calendar configured=%d ok=%d fresh=%d day=%ld count=%u total=%u offset=%u failures=%u age=%lld\n",
+               st->calendar.configured, st->calendar.ok, dash_calendar_fresh(&st->calendar, now),
+               (long)st->calendar.day, (unsigned)st->calendar.count, (unsigned)st->calendar.total,
+               (unsigned)st->calendar.offset, st->calendar.fetch_failures,
+               st->calendar.fetched_at ? (long long)(now-st->calendar.fetched_at) : -1LL);
         app_unlock(false);
         return true;
     }

@@ -119,7 +119,11 @@ def show_message(line):
     label, fields = parse_message(line)
     stage = fields.get("stage")
     description = STAGES.get(stage, stage)
-    if label == "progress":
+    if label == "ota":
+        print(f"固件 · {fields.get('slot', '?')} · 槽位 {int(fields.get('size', 0)) // 1048576} MiB · "
+              f"{'已确认' if fields.get('verified') == '1' else '待验证'} · "
+              f"版本 {fields.get('elf', '?')[:12]} · OTA 状态 {fields.get('phase', '?')}", flush=True)
+    elif label == "progress":
         print(f"正在检查 · {description}", flush=True)
     elif label == "status":
         saved = "已保存" if fields.get("profile") == "1" else "待配置"
@@ -169,6 +173,16 @@ def show_message(line):
         print(f"[AI 推送] {decode_hex(fields['text'])}", flush=True)
     elif label == "dash":
         show_dash(fields)
+    elif label == "flights":
+        status = {"0": "等待数据", "1": "实时", "2": "数据过期", "3": "连接中断", "4": "未配置"}.get(fields.get("status"), "未知")
+        age = fields.get("age", "-1")
+        updated = "尚未收到数据" if age == "-1" else f"数据 {age} 秒前更新"
+        print(f"  航班 {status} · 雷达目标 {fields.get('count', '0')} 架 · {updated} · 连续失败 {fields.get('failures', '0')} 次", flush=True)
+    elif label == "calendar":
+        status = "实时" if fields.get("fresh") == "1" else "缓存或连接中断" if fields.get("configured") == "1" else "尚未接入"
+        age = fields.get("age", "-1")
+        updated = "尚未收到数据" if age == "-1" else f"数据 {age} 秒前更新"
+        print(f"  日历 {status} · 所选日期 {fields.get('total', '0')} 条 · {updated} · 连续失败 {fields.get('failures', '0')} 次", flush=True)
     elif label in ("token", "bemfa") and "saved" in fields:
         name = "Hub 设备令牌" if label == "token" else "巴法云 UID"
         print(f"{name}{'已写入板载闪存' if fields['saved'] == '1' else '写入失败 ' + fields.get('err', '')}。", flush=True)
@@ -287,10 +301,10 @@ def backup_original(esp, size, read_flash):
     print(f"原始 Flash 备份已校验 · {path}", flush=True)
 
 
-def flash(port, already_in_bootloader):
+def flash(port, already_in_bootloader, recover=False):
     from esptool import FatalError
     from esptool.cmds import (
-        attach_flash, connect_esp, detect_flash_size, erase_region, read_flash,
+        attach_flash, connect_esp, detect_flash_size, read_flash,
         reset_chip, run_stub, write_flash,
     )
 
@@ -302,18 +316,10 @@ def flash(port, already_in_bootloader):
         raise ValueError("编译产物的目标芯片应为 ESP32-S3。")
     images = {int(offset, 0): (BUILD / name).read_bytes()
               for offset, name in metadata["flash_files"].items()}
+    from flash_layout import plan_flash, COMMON
+    from server.ota import firmware_info
+    firmware_info(BUILD / metadata["app"]["file"])  # reject legacy/corrupt/test images before opening USB
     partition_table = images[0x8000]
-    # Locate the private partition in the binary table that will actually be written.
-    entries = (partition_table[offset:offset + 32] for offset in range(0, len(partition_table), 32))
-    campus_partition = next(
-        (entry for entry in entries
-         if entry[:4] == b"\xaa\x50\x01\x02" and entry[12:28].rstrip(b"\0") == b"campus_nvs"),
-        None,
-    )
-    if campus_partition is None:
-        raise ValueError("编译产物里缺少校园网配置分区。")
-    campus_offset = int.from_bytes(campus_partition[4:8], "little")
-    campus_size = int.from_bytes(campus_partition[8:12], "little")
     try:
         mode = "no-reset" if already_in_bootloader else "default-reset"
         with connect_esp(port=port, before=mode, connect_attempts=2) as rom:
@@ -328,16 +334,41 @@ def flash(port, already_in_bootloader):
             flash_size = detect_flash_size(esp)
             size = flash_size_in_bytes(flash_size)
             print(f"已确认 {rom.get_chip_description()} · Flash {flash_size}", flush=True)
-            if size < 4 * 1024 * 1024 or size > 32 * 1024 * 1024:
-                raise ValueError("当前编译适用于 4 至 32 MB 的 ESP32-S3 Flash。")
-            backup_original(esp, size, read_flash)
             previous_table = read_flash(esp, 0x8000, len(partition_table), no_progress=True)
-            if previous_table != partition_table:
-                erase_region(esp, campus_offset, campus_size)
+            ota_data = read_flash(esp, 0x216000, 0x2000, no_progress=True) if size >= 0x1000000 else b""
+            writes, migration, target = plan_flash(images, previous_table, size, ota_data,
+                                                  recover=recover)
+            protected = {}
+            for name, (_, _, start, length, _) in COMMON.items():
+                protected[name] = read_flash(esp, start, length, no_progress=True)
+            if migration or recover:
+                print("正在备份本次迁移前的完整 Flash（包含配置，不显示内容）…", flush=True)
+                snapshot = read_flash(esp, 0, size)
+                if len(snapshot) != size or hashlib.md5(snapshot).hexdigest() != esp.flash_md5sum(0, size):
+                    raise ValueError("迁移快照校验失败，未写入。")
+                BACKUPS.mkdir(exist_ok=True, mode=0o700)
+                path = BACKUPS / f"before-ota-{time.time_ns()}.bin"
+                import os
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(snapshot)
+                    f.flush()
+                    os.fsync(f.fileno())
+                if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(snapshot).digest():
+                    raise ValueError("迁移快照落盘校验失败，未写入。")
+                print(f"当前 Flash 快照已校验 · {path.name}", flush=True)
+                del snapshot
             settings = metadata["flash_settings"]
-            write_flash(esp, sorted(images.items()), flash_freq=settings["flash_freq"],
-                        flash_mode=settings["flash_mode"], flash_size=flash_size, compress=True)
-            print("烧录已校验。若板子仍在下载模式，松开 BOOT 后短按 EN / RST。", flush=True)
+            print(f"{'迁移至' if migration else '烧录'} dual6-v1 · ota_{target} · 配置分区原地保留", flush=True)
+            for offset, data in writes:
+                write_flash(esp, [(offset, data)], flash_freq=settings["flash_freq"],
+                            flash_mode=settings["flash_mode"], flash_size=flash_size, compress=True)
+                # Abort before changing boot selection/table if any protected byte changed.
+                for name, before in protected.items():
+                    _, _, start, length, _ = COMMON[name]
+                    if read_flash(esp, start, length, no_progress=True) != before:
+                        raise ValueError(f"{name} 校验不一致，停止后续写入。")
+            print("固件及原有配置分区字节均已校验。若仍在下载模式，松开 BOOT 后短按 EN / RST。", flush=True)
             reset_chip(esp)
     except FatalError as error:
         raise ValueError(str(error)) from None
@@ -348,19 +379,20 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32 校园网 USB 串口工具")
     parser.add_argument("action", choices=("flash", "setup", "status", "scan", "retry", "clear",
                                            "dash", "token", "bemfa", "lang", "demo", "muse",
-                                           "led", "monitor", "cat", "agent", "mi", "knob"))
+                                           "led", "monitor", "cat", "agent", "mi", "knob", "lcd", "wifips"))
     parser.add_argument("value", nargs="?",
-                        help="lang: zh/en；demo: ok/gh_failed/gh_running/server_down/off；"
+                        help="lang: zh/en；demo: ok/gh_failed/gh_running/server_down/flight/off；"
                              "muse: 提醒文字；led: GPIO 号或 off；token/bemfa: clear")
     parser.add_argument("--port", help="指定串口，例如 COM5 或 /dev/cu.usbmodem1101")
     parser.add_argument("--bootloader", action="store_true", help="已手动进入下载模式")
+    parser.add_argument("--recover", action="store_true", help="USB 恢复到 ota_0（保留配置和另一固件槽）")
     parser.add_argument("--value-file", help="token/bemfa：从文件读取，而不是隐藏输入")
     args = parser.parse_args()
     try:
         port = choose_port(args.port)
         print(f"正在连接 {port}…", flush=True)
         if args.action == "flash":
-            return flash(port, args.bootloader)
+            return flash(port, args.bootloader, args.recover)
         if args.action == "monitor":
             return monitor(port)
         with CampusSerial(port) as device:
@@ -387,10 +419,13 @@ def main():
                     raise ValueError("用法：knob cw|ccw [n] | hold cw|ccw [n] | press | long | rev")
                 device.request("KNOB " + " ".join(args.value.split()))
                 return 0
+            if args.action == "lcd":
+                device.request("LCD " + " ".join(args.value.split()) if args.value else "LCD")
+                return 0
             if args.action == "cat":
                 device.request("CAT " + " ".join(args.value.split()) if args.value else "CAT auto")
                 return 0
-            if args.action in ("lang", "demo", "led"):
+            if args.action in ("lang", "demo", "led", "wifips"):
                 if not args.value:
                     raise ValueError(f"{args.action} 需要一个参数。")
                 device.request(f"{args.action.upper()} {args.value}")

@@ -6,6 +6,10 @@
 #include <time.h>
 
 #include "dash_cat.h"
+#include "dash_flight_ui.h"
+#include "dash_calendar_ui.h"
+#include "dash_season.h"
+#include "dash_ota_ui.h"
 #include "dash_i18n.h"
 #include "dash_pix.h"
 #include "dash_theme.h"
@@ -107,6 +111,7 @@ static struct {
     /* Kiki */
     char bubble_override[DASH_MUSE_TEXT];
     uint32_t bubble_until; /* lv_tick ms */
+    bool flight_bubble;
     int touch_idx;
     int last_activity;
     int debug_activity, debug_night;
@@ -463,6 +468,7 @@ static void pomo_tick(void)
 
 static void bubble_say(const char *text, uint32_t ms)
 {
+    ui.flight_bubble = false;
     snprintf(ui.bubble_override, sizeof(ui.bubble_override), "%s", text);
     ui.bubble_until = tick_now() + ms;
     if (ui.bubble_text) {
@@ -575,6 +581,8 @@ static void tile_changed(lv_event_t *e)
         }
     }
     update_dots();
+    dash_flight_ui_page_changed();
+    dash_calendar_ui_page_changed();
 }
 
 static void lang_toggle_async(void *arg)
@@ -595,6 +603,7 @@ static void lang_clicked(lv_event_t *e)
 static void wake_clicked(lv_event_t *e)
 {
     ui.wake_until = tick_now() + 30000;
+    show(ui.night_veil, false);
 }
 
 static void build_top(lv_obj_t *scr)
@@ -645,6 +654,41 @@ static void page_gesture(lv_event_t *e)
     }
 }
 
+/* Double-tap anywhere except on a button goes back to Kiki's room. LVGL keeps the
+ * short-click streak on the input device: two short taps within 400 ms, a few px apart. */
+static bool on_button(lv_obj_t *o)
+{
+    for (; o && o != ui.scr && o != ui.tv; o = lv_obj_get_parent(o)) {
+        if (lv_obj_get_event_count(o) > 0) { /* lang switch, pomodoro/lamp buttons, popup */
+            return true;
+        }
+    }
+    return false;
+}
+
+static void double_tap(lv_event_t *e)
+{
+    lv_indev_t *indev = (lv_indev_t *)lv_event_get_target(e);
+    if (!ui.tv || ui.page == 0 || lv_indev_get_short_click_streak(indev) != 2 ||
+        on_button((lv_obj_t *)lv_event_get_param(e))) {
+        return;
+    }
+    dash_ui_set_page(0, ui.page == 1); /* slide back one page, jump from further away */
+}
+
+void dash_ui_attach_indev(lv_indev_t *indev)
+{
+    if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
+        return;
+    }
+    for (uint32_t i = 0; i < lv_indev_get_event_count(indev); ++i) {
+        if (lv_event_dsc_get_cb(lv_indev_get_event_dsc(indev, i)) == double_tap) {
+            return;
+        }
+    }
+    lv_indev_add_event_cb(indev, double_tap, LV_EVENT_SHORT_CLICKED, NULL);
+}
+
 static void build_home(lv_obj_t *t)
 {
     /* the room */
@@ -677,13 +721,17 @@ static void build_home(lv_obj_t *t)
     lv_obj_set_style_radius(rug, LV_RADIUS_CIRCLE, 0);
 
     /* a little potted plant on the left */
+    lv_obj_t *plant = box(t, 0, 0, 74, 180, T_WALL);
+    lv_obj_set_style_bg_opa(plant, LV_OPA_TRANSP, 0);
+    lv_obj_set_clickable(plant, false);
     static const int16_t leaf[4][4] = {{26, 118, 16, 16}, {38, 113, 18, 18}, {33, 126, 14, 14}, {48, 124, 13, 13}};
     for (int i = 0; i < 4; ++i) {
-        lv_obj_t *l = box(t, leaf[i][0], leaf[i][1], leaf[i][2], leaf[i][3], i % 2 ? 0x5DBB6E : 0x7BD389);
+        lv_obj_t *l = box(plant, leaf[i][0], leaf[i][1], leaf[i][2], leaf[i][3], i % 2 ? 0x5DBB6E : 0x7BD389);
         lv_obj_set_style_radius(l, LV_RADIUS_CIRCLE, 0);
     }
-    box(t, 28, 138, 34, 5, 0x7A5240);
-    box(t, 32, 143, 26, 18, 0x9C6B4E);
+    box(plant, 28, 138, 34, 5, 0x7A5240);
+    box(plant, 32, 143, 26, 18, 0x9C6B4E);
+    dash_season_create(t, ui.sky, plant);
 
     ui.cat_img = dash_cat_create(t, 108, 44);
     if (ui.cat_img) {
@@ -691,6 +739,8 @@ static void build_home(lv_obj_t *t)
         lv_obj_add_event_cb(ui.cat_img, cat_clicked, LV_EVENT_LONG_PRESSED, NULL);
         lv_obj_set_ext_click_area(ui.cat_img, 8);
     }
+    dash_season_foreground();
+    dash_calendar_ui_home(t);
 
     /* speech bubble with a pixel-staircase pointer up to Kiki */
     box(t, 169, 180, 6, 2, T_CARD);
@@ -959,13 +1009,13 @@ static void build_mihome(lv_obj_t *t)
         lv_obj_add_event_cb(c->btn, mi_btn_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         c->btn_lbl = label(c->btn, F.body, T_TEXT, 0, 0);
         lv_obj_center(c->btn_lbl);
-        /* washer: state, progress bar, time left */
+        /* washer: state, progress bar, expected finish time */
         c->state = label_w(c->card, F.body, T_TEXT, 110, 7, INNER_W - 120, LV_LABEL_LONG_MODE_CLIP);
         lv_obj_set_style_text_align(c->state, LV_TEXT_ALIGN_RIGHT, 0);
         c->bar = lv_bar_create(c->card);
         lv_obj_remove_style_all(c->bar);
         lv_obj_set_pos(c->bar, 40, 36);
-        lv_obj_set_size(c->bar, 88, 8);
+        lv_obj_set_size(c->bar, 60, 8); /* leaves room for "预计 12:42 洗好" */
         lv_bar_set_range(c->bar, 0, 100);
         lv_obj_set_style_bg_opa(c->bar, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_bg_color(c->bar, hex(T_LINE), LV_PART_MAIN);
@@ -973,7 +1023,7 @@ static void build_mihome(lv_obj_t *t)
         lv_obj_set_style_bg_color(c->bar, hex(T_INFO), LV_PART_INDICATOR);
         lv_obj_set_style_radius(c->bar, 2, LV_PART_MAIN);
         lv_obj_set_style_radius(c->bar, 2, LV_PART_INDICATOR);
-        c->left = label_w(c->card, F.small, T_MUTED, 132, 32, INNER_W - 142, LV_LABEL_LONG_MODE_CLIP);
+        c->left = label_w(c->card, F.small, T_MUTED, 104, 32, INNER_W - 114, LV_LABEL_LONG_MODE_CLIP);
         lv_obj_set_style_text_align(c->left, LV_TEXT_ALIGN_RIGHT, 0);
         /* scale: 30-day trend */
         c->spark = lv_line_create(c->card);
@@ -991,6 +1041,9 @@ static void build_mihome(lv_obj_t *t)
 
 static void destroy_pix(void)
 {
+    dash_calendar_ui_destroy();
+    dash_season_destroy();
+    dash_flight_ui_destroy();
     dash_cat_destroy();
     dash_pix_destroy(&ui.clock);
     dash_pix_destroy(&ui.heat);
@@ -1030,6 +1083,9 @@ static void build(void)
     build_pomodoro(ui.tiles[3]);
     build_mail(ui.tiles[4]);
     build_mihome(ui.tiles[5]);
+    dash_flight_ui_create(ui.tiles[6], ui.tiles[0]);
+    dash_calendar_ui_create(ui.tiles[7]);
+    lv_obj_move_to_index(ui.night_veil, -1); /* the outdoor scene follows the same night dimming */
 
     lv_obj_t *dots = lv_obj_create(scr);
     lv_obj_remove_style_all(dots);
@@ -1060,11 +1116,20 @@ static void rebuild(void)
         ui.popup = NULL;
     }
     destroy_pix();
+    /* Do not keep two complete eight-page trees resident during a language
+     * switch. A tiny temporary screen lets us delete the old active screen
+     * safely. Both screen loads happen before the next refresh, so the panel
+     * keeps its previous frame until the rebuilt screen is ready. */
+    lv_obj_t *blank = lv_obj_create(NULL);
+    lv_obj_remove_style_all(blank);
+    lv_obj_set_style_bg_color(blank, hex(T_BG), 0);
+    lv_obj_set_style_bg_opa(blank, LV_OPA_COVER, 0);
+    lv_screen_load(blank);
+    if (old) lv_obj_delete(old);
+    ui.tv = NULL;
     build();
     lv_screen_load(ui.scr);
-    if (old) {
-        lv_obj_delete(old);
-    }
+    lv_obj_delete(blank);
     if (ui.have_last) {
         dash_ui_update(&ui.last, ui.last_now);
     }
@@ -1152,6 +1217,7 @@ static void update_home(const dash_state_t *st, int64_t now, dash_freshness_t fr
     bool dim = ui.night && (int32_t)(tick_now() - ui.wake_until) >= 0;
     set_color(ui.wall, ui.night ? T_WALL_NIGHT : T_WALL);
     show(ui.night_veil, dim);
+    dash_season_update(now, st->clock_valid, mode == 2);
 
     /* pixel clock */
     if (st->clock_valid) {
@@ -1191,6 +1257,7 @@ static void update_home(const dash_state_t *st, int64_t now, dash_freshness_t fr
     }
     ui.last_activity = act;
     dash_cat_ctx_t ctx = {.activity = (dash_activity_t)act, .mood = mood, .pomo = pomo.phase};
+    if (act == DASH_ACT_FREE && st->clock_valid) ctx.idle = dash_idle_at(rnow);
     dash_cat_set_ctx(&ctx);
 
     if ((int32_t)(tick_now() - ui.bubble_until) < 0) {
@@ -1199,6 +1266,11 @@ static void update_home(const dash_state_t *st, int64_t now, dash_freshness_t fr
         set_text(ui.bubble_text, mood_line);
     } else if (pomo.phase == DASH_POMO_FOCUS) {
         set_text(ui.bubble_text, dash_tr(S_REACT_POMO_START));
+    } else if (pomo.phase == DASH_POMO_BREAK) {
+        set_text(ui.bubble_text, dash_tr(S_POMO_BREAK));
+    } else if (act == DASH_ACT_FREE) {
+        _Static_assert(S_IDLE_YARN-S_IDLE_SIT+1 == DASH_IDLE_COUNT, "idle captions follow the selector");
+        set_text(ui.bubble_text, dash_tr((dash_str_t)(S_IDLE_SIT+ctx.idle.kind)));
     } else {
         set_text(ui.bubble_text, dash_tr((dash_str_t)(S_ACT_SLEEP + act)));
     }
@@ -1700,8 +1772,16 @@ static void update_mihome(const dash_state_t *st)
                 }
             }
             buf[0] = '\0';
-            if (running && d->left_min >= 0) {
-                snprintf(buf, sizeof(buf), dash_tr(S_MI_LEFT_FMT), d->left_min);
+            if (running && d->state != DASH_MI_ST_PAUSE && d->eta > 0) {
+                /* the finish time, not a countdown: the washer itself reports its time left
+                 * only now and then, the hub dates the last report */
+                if (d->eta - ui.last_now < 60) {
+                    snprintf(buf, sizeof(buf), "%s", dash_tr(S_MI_ETA_SOON));
+                } else {
+                    char hm[8];
+                    dash_fmt_hhmm(d->eta, hm, sizeof(hm));
+                    snprintf(buf, sizeof(buf), dash_tr(S_MI_ETA_FMT), hm);
+                }
             }
             show(c->left, bar && buf[0]);
             set_text(c->left, buf);
@@ -1857,6 +1937,9 @@ void dash_ui_create(lv_display_t *disp, dash_lang_t lang)
     dash_i18n_set(lang);
     build();
     lv_screen_load(ui.scr);
+    for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) {
+        dash_ui_attach_indev(i); /* double-tap -> home; pointers created later call it themselves */
+    }
 }
 
 void dash_ui_update(const dash_state_t *st, int64_t now)
@@ -1875,10 +1958,21 @@ void dash_ui_update(const dash_state_t *st, int64_t now)
     update_pomodoro();
     update_mail(st, now);
     update_mihome(st);
+    dash_calendar_ui_update(&ui.last.calendar, now, st->clock_valid);
+    int64_t sky_now = routine_now();
+    if (ui.debug_night == 1) sky_now += (23 - ((sky_now + DASH_TZ_OFFSET_S)/3600)%24)*3600;
+    dash_ota_ui_update(&st->ota);
+    if (dash_ota_ui_active()) {
+        ui.wake_until = tick_now() + 10000;
+        dash_flight_ui_interrupt();
+    }
+    dash_flight_ui_update(&ui.last.flights, now, sky_now,
+                          ui.popup != NULL || dash_cat_reacting() != DASH_CAT_REACT_NONE || dash_ota_ui_active());
 }
 
 void dash_ui_on_event(const dash_event_t *e)
 {
+    dash_flight_ui_interrupt();
     char buf[128];
     dash_cat_react_t r = DASH_CAT_REACT_NONE;
     dash_str_t fmt = S_EVT_OTHER, title = S_EVT_OTHER;
@@ -1925,6 +2019,7 @@ void dash_ui_show_event(const dash_event_t *e, uint32_t ms)
 
 void dash_ui_show_muse(const char *utf8, int64_t ts, uint32_t ms)
 {
+    dash_flight_ui_interrupt();
     (void)ts;
     dash_cat_react(DASH_CAT_REACT_MUSE);
     bubble_say(utf8, ms + 2000);
@@ -1933,6 +2028,7 @@ void dash_ui_show_muse(const char *utf8, int64_t ts, uint32_t ms)
 
 void dash_ui_show_agent(const dash_muse_msg_t *m, uint32_t ms)
 {
+    dash_flight_ui_interrupt();
     char title[64], bubble[DASH_MUSE_TEXT + 32];
     agent_title(m, title, sizeof(title));
     dash_cat_react(m->kind == DASH_MSG_DONE        ? DASH_CAT_REACT_CI_PASS
@@ -1971,6 +2067,8 @@ void dash_ui_set_page(int page, bool anim)
         return;
     }
     ui.page = page;
+    dash_flight_ui_page_changed();
+    dash_calendar_ui_page_changed();
     lv_tileview_set_tile_by_index(ui.tv, (uint32_t)page, 0, anim ? LV_ANIM_ON : LV_ANIM_OFF);
     update_dots();
 }
@@ -1999,6 +2097,11 @@ void dash_ui_set_pomo_cb(dash_ui_pomo_cb_t cb)
 void dash_ui_set_mi_cb(dash_ui_mi_cb_t cb)
 {
     ui.mi_cb = cb;
+}
+
+void dash_ui_set_calendar_cb(dash_ui_calendar_cb_t cb)
+{
+    dash_calendar_ui_set_cb(cb);
 }
 
 bool dash_ui_mi_event_msg(const dash_state_t *st, const dash_event_t *e, dash_muse_msg_t *out)
@@ -2373,5 +2476,29 @@ void dash_ui_debug_time_offset(int64_t seconds)
     ui.time_offset = seconds;
     if (ui.have_last) {
         dash_ui_update(&ui.last, ui.last_now);
+    }
+}
+
+void dash_ui_debug_flyover(void)
+{
+    dash_flight_ui_debug();
+}
+
+bool dash_ui_alert_active(void)
+{
+    return ui.popup != NULL || dash_cat_reacting() != DASH_CAT_REACT_NONE || dash_ota_ui_active();
+}
+
+uint8_t dash_ui_ota_countdown_visible(void) { return dash_ota_ui_countdown(); }
+
+void dash_ui_flight_bubble(bool playing)
+{
+    if (playing) {
+        bubble_say(dash_tr(S_FLIGHT_LOOK), 6500);
+        ui.flight_bubble = true;
+    } else if (ui.flight_bubble) {
+        ui.flight_bubble = false;
+        ui.bubble_until = 0;
+        if (ui.have_last) update_home(&ui.last, ui.last_now, dash_freshness(&ui.last, ui.last_now));
     }
 }

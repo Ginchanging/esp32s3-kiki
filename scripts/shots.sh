@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Render simulator screenshots into shots/ plus contact sheets (shots/sheet_*.png):
-#   sheet_pages_zh / _en   the 6 pages
+#   sheet_pages_zh / _en   the 8 pages
 #   sheet_routine          Kiki through the day (every activity)
 #   sheet_reactions        CI pass / fail / start, server down / up, Muse, touch, morning
 #   sheet_moods            worried / nervous / confused, night, offline, boot
@@ -22,8 +22,11 @@ shot() { # name, args...
 }
 
 for lang in zh en; do
-  for page in 0 1 2 3 4 5; do
-    shot "page_${lang}_$page" --fixture "$FX/1_ok.json" --page "$page" --lang "$lang"
+  for page in 0 1 2 3 4 5 6 7; do
+    fixture="$FX/1_ok.json"
+    if [ "$page" = 6 ]; then fixture="$FX/10_flights_multi.json"; fi
+    if [ "$page" = 7 ]; then fixture="$FX/16_calendar.json"; fi
+    shot "page_${lang}_$page" --fixture "$fixture" --page "$page" --lang "$lang"
   done
 done
 acts=(sleep exercise breakfast class lunch nap code dinner free wash sunbathe)
@@ -50,6 +53,18 @@ shot "det_diary_zh" --fixture "$FX/1_ok.json" --page 4 --diary day
 shot "det_weekly_en" --fixture "$FX/1_ok.json" --page 4 --diary week --lang en
 shot "det_knob_bri" --fixture "$FX/1_ok.json" --page 5 --knob hold:3
 shot "det_knob_pomo" --fixture "$FX/1_ok.json" --page 3 --knob long --lang en
+shot "flight_day" --fixture "$FX/9_flight.json" --flyover --ms 2400
+shot "flight_night" --fixture "$FX/9_flight.json" --flyover --night --ms 2400
+shot "flight_notice" --fixture "$FX/9_flight.json" --flyover --ms 6500
+shot "flight_unknown" --fixture "$FX/12_flights_unknown.json" --page 6
+shot "flight_empty" --fixture "$FX/11_flights_empty.json" --page 6
+shot "flight_stale" --fixture "$FX/13_flights_stale.json" --page 6
+shot "flight_error" --fixture "$FX/14_flights_error.json" --page 6
+shot "calendar_empty" --fixture "$FX/17_calendar_empty.json" --page 7
+shot "calendar_cached" --fixture "$FX/18_calendar_cached.json" --page 7
+shot "calendar_disabled" --fixture "$FX/19_calendar_disabled.json" --page 7 --lang en
+python3 "$ROOT/scripts/holiday_shots.py" "$SIM" "$OUT"
+python3 "$ROOT/scripts/idle_shots.py" "$SIM" "$OUT"
 
 python3 - "$OUT" <<'PY'
 import sys, pathlib
@@ -78,5 +93,9 @@ sheet("routine", "act_", 6)
 sheet("reactions", "react_", 4)
 sheet("moods", "mood_", 3)
 sheet("details", "det_", 3)
+sheet("flights", "flight_", 4)
+sheet("calendar", "calendar_", 3)
+sheet("holidays", "holiday_", 4)
 PY
+python3 "$ROOT/scripts/ota_shots.py" >/dev/null
 ls "$OUT"/sheet_*.png | xargs -n1 basename

@@ -2,6 +2,7 @@
 # macOS counterpart of esp.ps1.
 #   ./esp.sh build                 compile the firmware (ESP-IDF v6.1)
 #   ./esp.sh flash                 flash via campus.py (keeps NetID / token / UID in campus_nvs)
+#   ./esp.sh ota [status|cancel|rollback]   publish an update over Wi-Fi (no USB)
 #   ./esp.sh monitor               serial log; Muse alerts are decoded to Chinese
 #   ./esp.sh setup|status|scan|retry|clear     campus Wi-Fi tools (unchanged)
 #   ./esp.sh dash                  dashboard status (token, MQTT, last fetch, heap)
@@ -16,6 +17,8 @@
 #   ./esp.sh agent done|attention|error [text]   inject an AI-agent push locally
 #   ./esp.sh mi lamp on|off|bri 60   Mi Home control through the hub (same as tapping the 米家 page)
 #   ./esp.sh knob cw|ccw [n]|hold cw [n]|press|long|rev   act like the EC11 knob (rev = flip direction)
+#   ./esp.sh lcd [inv|rgb|mx|my|tmx|tmy|txy|bl 60|mhz 20|reset]   screen status / per-module fixes
+#   ./esp.sh wifips on|off         Wi-Fi power save (default off: steadier 3V3, no backlight flicker)
 #   ./esp.sh mirror                live window of the REAL board (frames over USB, click = touch)
 #   ./esp.sh sim [fixture]         open the simulator window (fake data)
 #   ./esp.sh shots                 render all simulator screenshots into shots/
@@ -33,19 +36,21 @@ sim_build() {
 
 action="${1:-}"; shift || true
 case "$action" in
-  build) idf_env; idf.py build ;;
+  build) idf_env; idf.py "$@" build ;;
   flash) campus flash "$@" ;;
+  ota) idf_env; python -B scripts/ota.py "$@" ;;
   token)
     if [ "${1:-}" = clear ]; then campus token clear
     else campus token --value-file "${1:-server/secrets/device_token}"; fi ;;
-  setup|status|scan|retry|clear|dash|bemfa|lang|demo|muse|led|monitor) campus "$action" "$@" ;;
+  setup|status|scan|retry|clear|dash|bemfa|lang|demo|muse|led|wifips|monitor) campus "$action" "$@" ;;
   cat) campus cat "$*" ;;
   agent) campus agent "$*" ;;
   mi) campus mi "$*" ;;
   knob) campus knob "$*" ;;
+  lcd) campus lcd "$*" ;;
   muse-send) python3 scripts/muse_send.py "$@" ;;
   mirror) idf_env; python -B scripts/mirror.py "$@" ;;
   sim) sim_build >/dev/null; ./build-sim/dash_sim "${1:-fixtures/1_ok.json}" ;;
   shots) sim_build >/dev/null; ./scripts/shots.sh ;;
-  *) sed -n '2,20p' "$0"; exit 2 ;;
+  *) sed -n '2,22p' "$0"; exit 2 ;;
 esac

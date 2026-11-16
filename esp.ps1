@@ -4,7 +4,8 @@ param(
     [string]$Action,
 
     [string]$Port,
-    [switch]$Bootloader
+    [switch]$Bootloader,
+    [switch]$Recover
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +41,9 @@ if ($Port) {
 }
 if ($Bootloader) {
     $espCliArgs += '--bootloader'
+}
+if ($Recover) {
+    $espCliArgs += '--recover'
 }
 & $espPython -B (Join-Path $PSScriptRoot 'campus.py') @espCliArgs
 exit $LASTEXITCODE

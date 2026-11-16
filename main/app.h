@@ -57,6 +57,11 @@ bool app_touch_get(int *x, int *y, bool *pressed); /* true if more are queued */
 void app_request_mi(const char *dev, int on, int bri);
 bool app_take_mi_request(char *dev, size_t n, int *on, int *bri);
 
+void app_request_calendar(int32_t day, uint16_t offset);
+/* Always returns the latest query; true means an immediate request is pending. */
+bool app_take_calendar_request(int32_t *day, uint16_t *offset, uint32_t *seq);
+bool app_calendar_current_locked(uint32_t seq); /* state mutex must be held */
+
 /* Rotary knob events (dash_knob_ev_t) from the knob task or the KNOB serial command;
  * the UI task takes them. */
 void app_knob_push(int ev, int steps);
@@ -66,6 +71,10 @@ void app_knob_set_reverse(bool rev); /* NVS dash/knob_rev, loaded by the knob ta
 /* "CAT ..." test command for Kiki, applied by the UI task */
 void app_cat_request(const char *args);
 bool app_take_cat_request(char *out, size_t n);
+
+/* Wi-Fi modem-sleep (NVS dash/wifi_ps, default off: its current pulses made the 3V3 backlight flicker) */
+void app_wifi_ps_apply(void); /* reads NVS and applies; also called on every new connection */
+bool app_wifi_ps_on(void);
 
 /* --- NVS in the "campus_nvs" partition (new namespaces only) --- */
 esp_err_t app_nvs_get_str(const char *ns, const char *key, char *out, size_t n);
@@ -80,6 +89,14 @@ esp_err_t app_nvs_set_blob(const char *ns, const char *key, const void *data, si
 bool app_cmd_handle(char *line); /* extra "@sysu" serial commands */
 void ui_task(void *arg);
 void fetch_task(void *arg);
+/* The fetch task owns all HTTP requests, including OTA streaming. */
+int app_hub_json(const char *url, const char *token, const char *post, char *out, int cap, int *len);
+void app_ota_init(void);
+void app_ota_poll(const char *token, char *scratch, int capacity);
+void app_ota_hub_ok(void);
+void app_ota_ui_tick(void);
+void app_ota_ui_presented(uint8_t number);
+void app_ota_print_status(const char *prefix);
 void muse_task(void *arg);
 void led_task(void *arg);
 void knob_task(void *arg);
@@ -87,15 +104,56 @@ void knob_task(void *arg);
 /* Hub endpoint; the certificate is pinned (main/certs/hub.pem). */
 #define DASH_HUB_BASE "https://8.138.138.222:8443"
 #define DASH_HUB_STATUS_URL DASH_HUB_BASE "/api/device/status"
+#define DASH_HUB_FLIGHTS_URL DASH_HUB_BASE "/api/device/flights"
 #define DASH_HUB_MI_URL DASH_HUB_BASE "/api/device/mi" /* Mi Home control (POST) */
+#define DASH_HUB_CALENDAR_URL DASH_HUB_BASE "/api/device/calendar"
 #define DASH_HUB_CN "esp-dash.local"
 #define DASH_FETCH_PERIOD_MS 30000
+#define DASH_FLIGHT_PERIOD_MS 10000
 
 #define MUSE_MQTT_URI "mqtts://bemfa.com:9503" /* TLS 1.2; 9501 would send the UID in clear */
 #define MUSE_TOPIC "musealert"
 #define AGENT_TOPIC "agentalert" /* github.com/Ginchanging/agent-bemfa-notify */
 
 #define LED_DEFAULT_GPIO 48
+
+/* 2.8" ILI9341V screen (SPI2) + FT6336G touch (I2C), on the 3V3/5Vin header; see README */
+#define LCD_GPIO_SCK 12
+#define LCD_GPIO_MOSI 11
+#define LCD_GPIO_CS 10
+#define LCD_GPIO_DC 9
+#define LCD_GPIO_RST 8
+#define LCD_GPIO_BL 7
+#define TP_GPIO_SDA 15
+#define TP_GPIO_SCL 16
+#define TP_GPIO_INT 17
+#define TP_GPIO_RST 18
+#define LCD_BUF_LINES 32 /* two DMA buffers = 30 KiB; keep headroom for network allocations */
+#define LCD_DEFAULT_MHZ 40
+#define LCD_MIN_MHZ 5
+#define LCD_MAX_MHZ 80
+
+/* NVS dash/lcd_flags: per-module fixes, toggled with ./esp.sh lcd <name> */
+#define LCD_F_INV (1u << 0) /* colour inversion (IPS panels) */
+#define LCD_F_RGB (1u << 1) /* RGB instead of BGR (red and blue swapped) */
+#define LCD_F_MX (1u << 2)  /* mirror the picture left-right */
+#define LCD_F_MY (1u << 3)  /* mirror the picture top-bottom */
+#define LCD_F_TMX (1u << 4) /* mirror touch x */
+#define LCD_F_TMY (1u << 5) /* mirror touch y */
+#define LCD_F_TXY (1u << 6) /* swap touch x and y */
+#define LCD_FLAG_NAMES                                                                  \
+    {"inv", LCD_F_INV}, {"rgb", LCD_F_RGB}, {"mx", LCD_F_MX}, {"my", LCD_F_MY},         \
+        {"tmx", LCD_F_TMX}, {"tmy", LCD_F_TMY}, {"txy", LCD_F_TXY}
+
+/* Screen driver (app_lcd.c). UI task only, except app_lcd_request_reload(). */
+bool app_lcd_init(void);                                         /* false = stay headless */
+bool app_lcd_draw(int x1, int y1, int x2, int y2, uint16_t *px); /* byte-swaps px; true = DMA queued */
+void app_lcd_wait(void);                                         /* until the queued DMA is done */
+bool app_lcd_touch(int *x, int *y);                              /* true while a finger is down */
+void app_lcd_backlight_on(void);                                 /* after the first frame */
+void app_lcd_request_reload(void);                               /* settings changed (LCD command) */
+bool app_lcd_poll(void);                                         /* applies a reload; true = redraw */
+void app_lcd_print_status(const char *prefix);
 
 /* EC11 rotary knob (right header, next to GND) */
 #define KNOB_GPIO_A 1   /* CLK */

@@ -9,7 +9,7 @@
  *   t     routine clock +1 h      c  next activity      0       automatic activity/time
  *   n     night on/off            l  中文 / English     r       reload the fixture
  *   a / b / e  AI agent push: done / needs you / error (agent-bemfa-notify)
- *   w     Mi Home: the washer finishes            (tap a lamp card's button to toggle it)
+ *   w     Mi Home: the washer finishes            v     flyover demo (labelled)
  *   y / Y Kiki's diary / weekly report (normally written at 23:00, weekly on Sundays)
  *   [ / ] knob: turn (pages)    { / }  knob: press + turn (lamp brightness)
  *   k / K knob: click (lamp on/off) / long press (pomodoro)
@@ -49,6 +49,26 @@ static dash_event_cursor_t cursor;
 static dash_led_timers_t led_timers;
 static int64_t fixture_now;      /* "now" from the fixture, 0 = real clock */
 static int64_t fixture_loaded_ms; /* wall ms when the fixture was loaded */
+static cJSON *calendar_fixture;
+static int64_t calendar_shot_now;
+static bool calendar_update_queued;
+static const char *ota_demo;
+
+static void apply_ota_demo(void)
+{
+    if (!ota_demo) return;
+    state.ota.total = 100;
+    state.ota.received = 42;
+    if (!strncmp(ota_demo, "countdown:", 10)) {
+        state.ota.phase = DASH_OTA_COUNTDOWN;
+        state.ota.countdown = (uint8_t)atoi(ota_demo + 10);
+    } else if (!strcmp(ota_demo, "success")) state.ota.phase = DASH_OTA_SUCCEEDED;
+    else if (!strcmp(ota_demo, "failed")) state.ota.phase = DASH_OTA_FAILED;
+    else if (!strcmp(ota_demo, "rollback")) state.ota.phase = DASH_OTA_ROLLED_BACK;
+    else if (!strcmp(ota_demo, "validating")) state.ota.phase = DASH_OTA_VALIDATING;
+    else if (!strcmp(ota_demo, "verifying")) state.ota.phase = DASH_OTA_VERIFYING;
+    else state.ota.phase = DASH_OTA_DOWNLOADING;
+}
 
 static char fixture_paths[16][512];
 static int fixture_count;
@@ -194,11 +214,83 @@ static bool load_fixture(const char *path)
         }
     }
     apply_sim_section(json, len);
+    dash_flights_parse(&state.flights, json, len);
+    cJSON_Delete(calendar_fixture);
+    cJSON *calendar_root = cJSON_ParseWithLength(json, len);
+    calendar_fixture = cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(calendar_root, "calendar"), true);
+    cJSON_Delete(calendar_root);
+    dash_calendar_parse(&state.calendar, json, len);
     free(json);
     fixture_loaded_ms = wall_ms();
     printf("fixture: %s  runs=%d servers=%d events=%d muse=%d\n", path, state.run_count,
            state.server_count, state.event_count, state.muse_count);
     return true;
+}
+
+static void calendar_update_async(void *unused)
+{
+    calendar_update_queued = false;
+    dash_ui_update(&state, calendar_shot_now ? calendar_shot_now : sim_now());
+}
+
+static void calendar_number(cJSON *root, const char *name, double value)
+{
+    cJSON_DeleteItemFromObjectCaseSensitive(root, name);
+    cJSON_AddNumberToObject(root, name, value);
+}
+
+static void calendar_request(int32_t day, uint16_t offset)
+{
+    int64_t now = calendar_shot_now ? calendar_shot_now : sim_now();
+    int32_t today = dash_local_day(now);
+    cJSON *reply = calendar_fixture ? cJSON_Duplicate(calendar_fixture, true) : cJSON_CreateObject();
+    if (!calendar_fixture) {
+        cJSON_AddNumberToObject(reply, "schema", 1);
+        cJSON_AddBoolToObject(reply, "configured", false);
+        cJSON_AddBoolToObject(reply, "ok", false);
+        cJSON_AddNumberToObject(reply, "fetched_at", 0);
+    }
+    const cJSON *all = cJSON_GetObjectItemCaseSensitive(reply, "all_events");
+    if (!all) all = cJSON_GetObjectItemCaseSensitive(calendar_fixture, "events");
+    cJSON *events = cJSON_CreateArray(), *counts = cJSON_CreateArray();
+    int total = 0;
+    for (int i = 0; i < 7; ++i) {
+        int n = 0;
+        int64_t lo = (int64_t)(today+i)*86400-DASH_TZ_OFFSET_S;
+        const cJSON *event;
+        cJSON_ArrayForEach(event, all) {
+            const cJSON *a = cJSON_GetObjectItemCaseSensitive(event, "start");
+            const cJSON *b = cJSON_GetObjectItemCaseSensitive(event, "end");
+            if (!cJSON_IsNumber(a) || !cJSON_IsNumber(b) || a->valuedouble >= lo+86400 || b->valuedouble <= lo) continue;
+            ++n;
+            if (today+i == day) {
+                if (total >= offset && total < offset+DASH_CALENDAR_BATCH)
+                    cJSON_AddItemToArray(events, cJSON_Duplicate(event, true));
+                ++total;
+            }
+        }
+        cJSON_AddItemToArray(counts, cJSON_CreateNumber(n));
+    }
+    cJSON_DeleteItemFromObjectCaseSensitive(reply, "events");
+    cJSON_DeleteItemFromObjectCaseSensitive(reply, "all_events");
+    cJSON_DeleteItemFromObjectCaseSensitive(reply, "counts");
+    cJSON_AddItemToObject(reply, "events", events);
+    cJSON_AddItemToObject(reply, "counts", counts);
+    calendar_number(reply, "day", day);
+    calendar_number(reply, "week_start", today);
+    calendar_number(reply, "offset", offset);
+    calendar_number(reply, "total", total);
+    char *json = cJSON_PrintUnformatted(reply);
+    if (json) {
+        dash_calendar_parse(&state.calendar, json, strlen(json));
+        cJSON_free(json);
+    }
+    cJSON_Delete(reply);
+    printf("calendar query day=%ld offset=%u total=%d\n", (long)day, (unsigned)offset, total);
+    if (!calendar_update_queued) {
+        calendar_update_queued = true;
+        lv_async_call(calendar_update_async, NULL);
+    }
 }
 
 static int cmp_str(const void *a, const void *b)
@@ -320,6 +412,19 @@ static void swipe(int x0, int y0, int x1, int y1)
     run_for(800);
 }
 
+/* n quick taps at (x, y): 60 ms down, 120 ms up */
+static void taps(int x, int y, int n)
+{
+    fake_x = x, fake_y = y;
+    for (int i = 0; i < n; ++i) {
+        fake_pressed = true;
+        run_for(60);
+        fake_pressed = false;
+        run_for(120);
+    }
+    run_for(800);
+}
+
 static bool write_bmp(const char *path, int scale)
 {
     int w = DASH_UI_W * scale, h = DASH_UI_H * scale;
@@ -362,7 +467,7 @@ static bool write_bmp(const char *path, int scale)
 static int run_shot(const char *out, const char *fixture, int page, dash_lang_t lang,
                     int64_t now_arg, const char *muse, bool event, int scale, int act, bool night,
                     int react, const char *look, int run_ms, int agent, const char *swipes, bool mi_done,
-                    int diary, const char *knob)
+                    int diary, const char *knob, bool flyover)
 {
     lv_init();
     lv_tick_set_cb(fake_tick);
@@ -375,8 +480,11 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
     if (fixture && !load_fixture(fixture)) {
         return 1;
     }
+    apply_ota_demo();
     int64_t now = now_arg ? now_arg : fixture_now ? fixture_now : (int64_t)time(NULL);
+    calendar_shot_now = now;
     dash_ui_set_mi_cb(mi_request);
+    dash_ui_set_calendar_cb(calendar_request);
     dash_ui_create(disp, lang);
     dash_ui_set_page(page, false);
     if (muse) {
@@ -438,21 +546,36 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
                                                         : DASH_KNOB_TURN;
         dash_ui_knob(ev, n);
     }
-    if (swipes) { /* "x0,y0,x1,y1;x0,y0,x1,y1;..." -> prints the page after each swipe */
+    if (flyover) dash_ui_debug_flyover();
+    if (swipes) { /* "wait:6500;tap:x,y,n;..." also tests timed, actionable notifications */
         lv_indev_t *finger = lv_indev_create();
         lv_indev_set_type(finger, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(finger, fake_touch_read);
         lv_indev_set_display(finger, disp);
+        dash_ui_attach_indev(finger);
         run_for(200);
         const char *q = swipes;
         while (*q) {
-            int x0, y0, x1, y1, used = 0;
-            if (sscanf(q, "%d,%d,%d,%d%n", &x0, &y0, &x1, &y1, &used) != 4) {
+            int x0, y0, x1, y1, n, used = 0;
+            int before = dash_ui_get_page();
+            if (sscanf(q, "wait:%d%n", &n, &used) == 1) {
+                run_for(n);
+                printf("wait %d ms page=%d\n", n, dash_ui_get_page());
+            } else if (!strncmp(q, "muse", 4)) {
+                dash_ui_show_muse("Muse priority test", now, 6000);
+                used = 4;
+            } else if (!strncmp(q, "lang", 4)) {
+                dash_ui_set_lang(dash_ui_get_lang() == DASH_LANG_ZH ? DASH_LANG_EN : DASH_LANG_ZH);
+                used = 4;
+            } else if (sscanf(q, "tap:%d,%d,%d%n", &x0, &y0, &n, &used) == 3) {
+                taps(x0, y0, n);
+                printf("tap x%d at %d,%d  page %d -> %d\n", n, x0, y0, before, dash_ui_get_page());
+            } else if (sscanf(q, "%d,%d,%d,%d%n", &x0, &y0, &x1, &y1, &used) == 4) {
+                swipe(x0, y0, x1, y1);
+                printf("swipe %d,%d->%d,%d  page %d -> %d\n", x0, y0, x1, y1, before, dash_ui_get_page());
+            } else {
                 break;
             }
-            int before = dash_ui_get_page();
-            swipe(x0, y0, x1, y1);
-            printf("swipe %d,%d->%d,%d  page %d -> %d\n", x0, y0, x1, y1, before, dash_ui_get_page());
             q += used;
             if (*q == ';') {
                 ++q;
@@ -595,7 +718,7 @@ static void key_cb(lv_event_t *e)
         for (int i = 0; i < state.mi_count; ++i) {
             if (state.mi[i].kind == DASH_MI_WASHER) {
                 state.mi[i].state = DASH_MI_ST_DONE;
-                state.mi[i].left_min = 0;
+                state.mi[i].eta = 0;
                 inject_event(DASH_EVK_MI_DONE, state.mi[i].id);
                 return;
             }
@@ -644,7 +767,9 @@ static void key_cb(lv_event_t *e)
         dash_ui_debug_night(sim_night);
         return;
     }
-    if (k >= '1' && k <= '9') {
+    if (k == 'v' || k == 'V') {
+        dash_ui_debug_flyover();
+    } else if (k >= '1' && k <= '9') {
         select_fixture((int)(k - '1'));
     } else if (k == LV_KEY_LEFT) {
         dash_ui_step_page(-1);
@@ -752,6 +877,7 @@ static int run_interactive(const char *fixture, dash_lang_t lang)
         dash_events_take_new(&cursor, &state, NULL, 0); /* baseline, like the device */
     }
     dash_ui_set_mi_cb(mi_request);
+    dash_ui_set_calendar_cb(calendar_request);
     dash_ui_create(disp, lang);
     dash_ui_update(&state, sim_now());
 
@@ -785,7 +911,7 @@ int main(int argc, char **argv)
     const char *shot = NULL, *fixture = NULL, *muse = NULL;
     int page = 0, scale = 2;
     int64_t now = 0;
-    bool event = false, night = false;
+    bool event = false, night = false, flyover = false;
     int act = -1, react = 0, run_ms = 0, agent = 0;
     bool mi_done = false;
     int diary = 0;
@@ -812,6 +938,8 @@ int main(int argc, char **argv)
             event = true;
         } else if (!strcmp(a, "--night")) {
             night = true;
+        } else if (!strcmp(a, "--flyover")) {
+            flyover = true;
         } else if (!strcmp(a, "--act") && v) {
             act = atoi(v), ++i;
         } else if (!strcmp(a, "--react") && v) {
@@ -830,6 +958,8 @@ int main(int argc, char **argv)
             swipes = v, ++i;
         } else if (!strcmp(a, "--ms") && v) {
             run_ms = atoi(v), ++i;
+        } else if (!strcmp(a, "--ota") && v) {
+            ota_demo = v, ++i;
         } else if (a[0] != '-') {
             fixture = a;
         } else {
@@ -839,7 +969,7 @@ int main(int argc, char **argv)
     }
     if (shot) {
         return run_shot(shot, fixture, page, lang, now, muse, event, scale, act, night, react, look, run_ms, agent, swipes, mi_done,
-                        diary, knob);
+                        diary, knob, flyover);
     }
 #if DASH_LV_SIM
     return run_interactive(fixture, lang);

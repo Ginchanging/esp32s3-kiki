@@ -21,6 +21,8 @@ import hmac
 import http.client
 import datetime
 import json
+import math
+import queue
 import re
 import os
 import socket
@@ -31,8 +33,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # trusted sibling module, also under python -I
+from ota import OTAStore, HEX64
 
 HUB_CN = "esp-dash.local"  # name in the pinned self-signed certificate
 CPU_HIST = 60               # one sample per minute, last hour
@@ -226,6 +231,9 @@ class Hub:
         self.events = []
         self.last_event_id = 0
         self.mihome = None  # MiHome when Home Assistant is configured
+        self.flights = None  # FlightRadar; independent from dashboard freshness/events
+        self.calendar = None  # iCloud via HA; independent from dashboard freshness
+        self.ota = OTAStore()
 
     def add_event(self, kind, subject):
         # ids are epoch milliseconds so they keep increasing across hub restarts
@@ -424,6 +432,155 @@ class HomeAssistant:
         return self.call("POST", f"/api/services/{domain}/{service}", data)
 
 
+CALENDAR_BATCH = 8
+CALENDAR_MAX_EVENTS = 4096
+
+
+def calendar_day(date):
+    return (date - datetime.date(1970, 1, 1)).days
+
+
+def calendar_text(value, limit):
+    """Bound UTF-8 bytes, including the ellipsis, without splitting a character."""
+    value = " ".join(value.split()) if isinstance(value, str) else ""
+    raw = value.encode("utf-8")
+    return value if len(raw) <= limit else raw[:limit - 3].decode("utf-8", "ignore") + "…"
+
+
+class CalendarHub:
+    """Read a single HA CalDAV config entry, then serve small in-memory snapshots.
+
+    Calendar events never enter Hub.add_event(), the ledger, or persistent logs.
+    Only a complete successful poll replaces the cache, so a failed calendar
+    cannot turn a real day's appointments into a misleading empty list.
+    """
+
+    def __init__(self, ha, config, clock=time.time):
+        title = config.get("entry_title", "Kiki iCloud")
+        if not isinstance(title, str) or not title.strip() or len(title) > 100:
+            raise ValueError("invalid calendar entry title")
+        self.ha, self.title, self.clock = ha, title, clock
+        self.lock = threading.Lock()
+        self.events = []
+        self.configured = self.ok = self.error = False
+        self.fetched_at = 0
+        self.window_start = self.window_end = 0
+
+    @staticmethod
+    def event_time(value):
+        if not isinstance(value, dict):
+            raise ValueError("invalid calendar time")
+        if "date" in value:
+            d = datetime.date.fromisoformat(value["date"])
+            return int(datetime.datetime.combine(d, datetime.time(), CN_TZ).timestamp()), True
+        t = datetime.datetime.fromisoformat(value["dateTime"].replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=CN_TZ)
+        return int(t.timestamp()), False
+
+    def poll(self):
+        today = cn_date(self.clock())
+        start = datetime.datetime.combine(today, datetime.time(), CN_TZ)
+        end = start + datetime.timedelta(days=7)
+        # integration_entities accepts a config-entry title. Do not accidentally
+        # aggregate unrelated calendars (or another CalDAV account) in HA.
+        template = ("{{ integration_entities(" + json.dumps(self.title) + ")"
+                    " | select('match', '^calendar[.]') | list | tojson }}")
+        try:
+            entities = self.ha.call("POST", "/api/template", {"template": template})
+            if not isinstance(entities, list) or not all(
+                    isinstance(e, str) and ENTITY_RE.fullmatch(e) and e.startswith("calendar.")
+                    for e in entities):
+                raise ValueError("invalid calendar entities")
+            if not entities:
+                with self.lock:
+                    # A temporarily missing/reloading entry must not destroy
+                    # a previously working snapshot.
+                    self.ok = False
+                    self.error = self.configured
+                return False
+            with self.lock:
+                self.configured = True
+            names = self.ha.call("GET", "/api/calendars")
+            if not isinstance(names, list):
+                raise ValueError("invalid calendar list")
+            names = {e["entity_id"]: e.get("name", e["entity_id"]) for e in names}
+            query = urllib.parse.urlencode({"start": start.isoformat(), "end": end.isoformat()})
+            events, seen = [], set()
+            for entity in sorted(set(entities)):
+                data = self.ha.call("GET", f"/api/calendars/{entity}?{query}")
+                if not isinstance(data, list):
+                    raise ValueError("invalid event list")
+                for event in data:
+                    if (event.get("status") or "").lower() in ("cancelled", "canceled"):
+                        continue
+                    a, all_day = self.event_time(event["start"])
+                    b, end_all_day = self.event_time(event["end"])
+                    if b <= a or all_day != end_all_day:
+                        raise ValueError("invalid event interval")
+                    if b <= int(start.timestamp()) or a >= int(end.timestamp()):
+                        continue
+                    if uid := event.get("uid"):
+                        key = (entity, uid, a)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                    events.append({"start": a, "end": b, "all_day": all_day,
+                                   "title": calendar_text(event.get("summary"), 96),
+                                   "calendar": calendar_text(names.get(entity, entity), 48)})
+                    if len(events) > CALENDAR_MAX_EVENTS:
+                        raise ValueError("calendar capacity exceeded")
+            events.sort(key=lambda e: (not e["all_day"], e["start"], e["end"], e["calendar"], e["title"]))
+        except (HAError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            with self.lock:
+                self.ok = False
+                self.error = True
+            log("calendar: update failed")
+            return False
+        with self.lock:
+            self.events = events
+            self.configured = self.ok = True
+            self.error = False
+            self.fetched_at = int(self.clock())
+            self.window_start, self.window_end = int(start.timestamp()), int(end.timestamp())
+        log("calendar: updated", len(entities), "calendars,", len(events), "events")
+        return True
+
+    @staticmethod
+    def query(day, offset, now):
+        today = cn_date(now)
+        selected = today if day is None else datetime.date.fromisoformat(day)
+        if not today <= selected < today + datetime.timedelta(days=7):
+            raise ValueError("day outside seven-day window")
+        if not 0 <= offset <= CALENDAR_MAX_EVENTS or offset % CALENDAR_BATCH:
+            raise ValueError("invalid calendar offset")
+        return today, selected
+
+    def snapshot(self, day=None, offset=0):
+        now = self.clock()
+        today, selected = self.query(day, offset, now)
+        lo = int(datetime.datetime.combine(today, datetime.time(), CN_TZ).timestamp())
+        chosen = int(datetime.datetime.combine(selected, datetime.time(), CN_TZ).timestamp())
+        with self.lock:
+            counts = [sum(e["start"] < lo + (i+1)*86400 and e["end"] > lo+i*86400
+                          for e in self.events) for i in range(7)]
+            events = [e for e in self.events if e["start"] < chosen+86400 and e["end"] > chosen]
+            return {"schema": 1, "configured": self.configured,
+                    "ok": self.ok and self.window_start <= lo and self.window_end >= lo+7*86400,
+                    "error": self.error,
+                    "fetched_at": self.fetched_at, "week_start": calendar_day(today),
+                    "counts": counts, "day": calendar_day(selected), "offset": offset,
+                    "total": len(events), "events": events[offset:offset+CALENDAR_BATCH]}
+
+    def loop(self):
+        while True:
+            ok = self.poll()
+            now = self.clock()
+            midnight = datetime.datetime.combine(cn_date(now)+datetime.timedelta(days=1),
+                                                 datetime.time(), CN_TZ).timestamp()
+            time.sleep(max(1, min(900 if ok else 60, midnight-now)))
+
+
 def mi_washer_state(raw, overrides, words=MI_STATE_WORDS):
     if raw in overrides:
         return overrides[raw]
@@ -553,7 +710,11 @@ class MiHome:
                 state = stage
         v["state"] = state
         if d.get("left"):
-            v["left_min"] = mi_minutes(self.ha.state(d["left"]))
+            st = self.ha.state(d["left"])
+            v["left_min"] = mi_minutes(st)
+            # when that value was reported: the washer goes quiet for most of a cycle (it
+            # stopped at "71 min" for 80 minutes), so the finish time is counted from here
+            v["_left_at"] = ha_time(st.get("last_changed"))
         if d.get("end_event"):  # HA event entity: its state is the time of the last "wash finished"
             v["_end"] = str(self.ha.state(d["end_event"]).get("state", ""))
         return v
@@ -561,7 +722,7 @@ class MiHome:
     def track_washer(self, d, v):
         run = self.runs.setdefault(d["id"], {"state": None, "total": 0, "end": None, "fired": 0})
         prev, state, left = run["state"], v.get("state"), v.get("left_min")
-        end = v.pop("_end", None)
+        end, left_at = v.pop("_end", None), v.pop("_left_at", None)
         if not v["online"]:
             return
         finished = False
@@ -577,6 +738,9 @@ class MiHome:
                 run["total"] = 0
             if left:
                 run["total"] = max(run["total"], left)
+            if left is not None and left_at and state != "pause":
+                v["eta"] = int(left_at + left * 60)  # expected finish (epoch s); the card shows this
+                left = max(0.0, (v["eta"] - time.time()) / 60)
             if run["total"] and left is not None:
                 v["pct"] = max(0, min(100, round(100 * (1 - left / run["total"]))))
         elif prev in MI_RUNNING and (state == "done" or (state in ("idle", "off") and (left is None or left <= 1))):
@@ -685,6 +849,262 @@ class MiHome:
         return self.snapshot()
 
 
+# ---------------------------------------------------------------- overhead flights (personal, non-commercial)
+# Position data: https://github.com/adsbfi/opendata (attribution required).
+# Reference routes: https://www.adsbdb.com/ . Routes are not a live flight plan.
+
+def flight_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def flight_wgs84(lon, lat, coord_type):
+    """Normalize a configured point. BD-09 inverse is approximate, ample for a 5 km circle.
+
+    Conversion formula adapted from wandergis/coordtransform (MIT).
+    https://github.com/wandergis/coordtransform
+    """
+    if not flight_number(lon) or not flight_number(lat) or not (-180 <= lon <= 180 and -90 <= lat <= 90):
+        raise ValueError("invalid location")
+    if coord_type == "wgs84":
+        return float(lon), float(lat)
+    if coord_type not in ("bd09", "gcj02"):
+        raise ValueError("coord_type must be wgs84, bd09 or gcj02")
+    if coord_type == "bd09":
+        x, y = lon - .0065, lat - .006
+        z = math.hypot(x, y) - .00002 * math.sin(y * math.pi * 3000 / 180)
+        theta = math.atan2(y, x) - .000003 * math.cos(x * math.pi * 3000 / 180)
+        lon, lat = z * math.cos(theta), z * math.sin(theta)
+    if not (73.66 < lon < 135.05 and 3.86 < lat < 53.55):
+        return lon, lat
+
+    def offset(xlon, xlat):
+        x, y = xlon - 105, xlat - 35
+        da = -100 + 2*x + 3*y + .2*y*y + .1*x*y + .2*math.sqrt(abs(x))
+        da += (20*math.sin(6*x*math.pi) + 20*math.sin(2*x*math.pi))*2/3
+        da += (20*math.sin(y*math.pi) + 40*math.sin(y*math.pi/3))*2/3
+        da += (160*math.sin(y*math.pi/12) + 320*math.sin(y*math.pi/30))*2/3
+        db = 300 + x + 2*y + .1*x*x + .1*x*y + .1*math.sqrt(abs(x))
+        db += (20*math.sin(6*x*math.pi) + 20*math.sin(2*x*math.pi))*2/3
+        db += (20*math.sin(x*math.pi) + 40*math.sin(x*math.pi/3))*2/3
+        db += (150*math.sin(x*math.pi/12) + 300*math.sin(x*math.pi/30))*2/3
+        r = math.radians(xlat)
+        m = 1 - .00669342162296594323 * math.sin(r)**2
+        s = math.sqrt(m)
+        return (db*180/(6378245/s*math.cos(r)*math.pi),
+                da*180/((6378245*(1-.00669342162296594323))/(m*s)*math.pi))
+
+    wlon, wlat = lon, lat
+    for _ in range(8):
+        dx, dy = offset(wlon, wlat)
+        wlon -= wlon + dx - lon
+        wlat -= wlat + dy - lat
+    return wlon, wlat
+
+
+def flight_geometry(lon0, lat0, lon, lat):
+    p, q, dl = math.radians(lat0), math.radians(lat), math.radians(lon-lon0)
+    h = math.sin((q-p)/2)**2 + math.cos(p)*math.cos(q)*math.sin(dl/2)**2
+    distance = 6371008.8 * 2 * math.asin(min(1, math.sqrt(max(0, h))))
+    bearing = math.degrees(math.atan2(math.sin(dl)*math.cos(q),
+                                     math.cos(p)*math.sin(q)-math.sin(p)*math.cos(q)*math.cos(dl))) % 360
+    return int(round(distance)), int(round(bearing)) % 360
+
+
+def flight_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Kiki-desk-dashboard/1.0 (personal)",
+                                              "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=6) as resp:
+        # A bounded upstream body, never passed raw to the microcontroller.
+        raw = resp.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("flight response too large")
+    return json.loads(raw)
+
+
+class FlightRadar:
+    """One position worker + one metadata worker; requests only read cached snapshots."""
+    AIRLINER = re.compile(r"^(?:A[23456]\d\d|A1[89]N|A2[01]N|B[378]\d\d|B7\d[A-Z]|B38M|B39M|B3XM|C919|C909|ARJ|E1[4579]\d|E2\d\d|CRJ|AT[47]|DH8|MD[189]|DC10|IL96|BLCF|A3ST)")
+    CALLSIGN = re.compile(r"^[A-Z]{3}[0-9][A-Z0-9]{0,4}$")
+
+    def __init__(self, config, get_json=flight_json, clock=time.time):
+        self.lon, self.lat = flight_wgs84(config["lon"], config["lat"], config.get("coord_type", "wgs84"))
+        self.radius = config.get("radius_m", 20000)
+        self.alert_radius = config.get("alert_radius_m", 5000)
+        if (not flight_number(self.radius) or not flight_number(self.alert_radius)
+                or not 1000 <= self.alert_radius <= self.radius <= 100000):
+            raise ValueError("invalid flight radii")
+        self.place = str(config.get("place", "Desk"))[:16]
+        self.get_json, self.clock = get_json, clock
+        self.lock = threading.Lock()
+        self.jobs = queue.Queue(maxsize=32)
+        self.pending, self.meta = set(), {}
+        self.aircraft, self.events = [], []
+        saved = load_state("flights.json")
+        self.tracks = {k: v for k, v in saved.get("tracks", {}).items() if isinstance(v, dict)}
+        self.last_id = int(saved.get("last_id", 0))
+        self.baseline = False
+        self.fetched_at = 0
+        self.ok = False
+        self.retry_s = 10
+
+    def metadata(self, callsign):
+        """Called under lock. Missing metadata never stalls a position poll."""
+        if not self.CALLSIGN.fullmatch(callsign):
+            return {}
+        rec = self.meta.get(callsign)
+        if (not rec or rec[0] <= self.clock()) and callsign not in self.pending:
+            try:
+                self.jobs.put_nowait(callsign)
+                self.pending.add(callsign)
+            except queue.Full:
+                pass
+        return dict(rec[1]) if rec else {}
+
+    def enrich(self, callsign):
+        route, airline = {}, {}
+        try:
+            response = self.get_json("https://api.adsbdb.com/v0/callsign/" + callsign).get("response", {})
+            route = response.get("flightroute") or {}
+            airline = route.get("airline") or {}
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        if not airline:
+            response = self.get_json("https://api.adsbdb.com/v0/airline/" + callsign[:3]).get("response", [])
+            airline = response[0] if isinstance(response, list) and response else {}
+        out = {"airline": str(airline.get("name") or "")[:32]}
+        flight = str(route.get("callsign_iata") or "")
+        # Alphanumeric ATC callsigns are not necessarily public flight numbers.
+        out["flight"] = flight if re.fullmatch(r"(?:[A-Z][A-Z0-9]|[0-9][A-Z])\d{1,4}", flight) else ""
+        for end in ("origin", "destination"):
+            airport = route.get(end) or {}
+            out[end] = str(airport.get("iata_code") or airport.get("icao_code") or "")[:4]
+            out[end + "_city"] = str(airport.get("municipality") or airport.get("name") or "")[:32]
+        return out
+
+    def enrich_loop(self):
+        while True:
+            callsign = self.jobs.get()
+            try:
+                out = self.enrich(callsign)
+                ttl = 21600 if out.get("origin") and out.get("destination") else 900
+            except (OSError, ValueError, TypeError, AttributeError, http.client.HTTPException):
+                out, ttl = {}, 60
+            with self.lock:
+                self.meta[callsign] = (self.clock() + ttl, out)
+                self.pending.discard(callsign)
+                if len(self.meta) > 512:
+                    oldest = min(self.meta, key=lambda k: self.meta[k][0])
+                    del self.meta[oldest]
+            self.jobs.task_done()
+
+    def ingest(self, data):
+        now = self.clock()
+        stamp = data.get("now")
+        if not flight_number(stamp) or not isinstance(data.get("ac"), list):
+            raise ValueError("invalid position response")
+        stamp = stamp / 1000 if stamp > 100000000000 else stamp
+        if not -5 <= now - stamp <= 30:
+            raise ValueError("stale position response")
+        aircraft = []
+        for a in data["ac"]:
+            if not isinstance(a, dict):
+                continue
+            lon, lat, age = a.get("lon"), a.get("lat"), a.get("seen_pos")
+            hexid, model = str(a.get("hex", "")).lower(), str(a.get("t") or "")[:8]
+            flags = a.get("dbFlags", 0)
+            category = str(a.get("category", ""))
+            if (not all(flight_number(v) for v in (lon, lat, age)) or not -180 <= lon <= 180
+                    or not -90 <= lat <= 90 or age < 0 or now - stamp + age > 30
+                    or not re.fullmatch(r"[0-9a-f]{6}", hexid)
+                    or a.get("alt_baro") == "ground" or category in ("A7", "B1", "B2", "B3", "B4", "B6", "C1", "C2", "C3")
+                    or (isinstance(flags, int) and flags & 1)):
+                continue
+            distance, bearing = flight_geometry(self.lon, self.lat, lon, lat)
+            if distance > self.radius:
+                continue
+            callsign = str(a.get("flight") or "").strip().upper()[:8]
+            altitude, heading = a.get("alt_baro"), a.get("track")
+            f = {"hex": hexid, "callsign": callsign, "registration": str(a.get("r") or "")[:12],
+                 "model": model, "observed_at": int(stamp-age), "distance_m": distance,
+                 "bearing": bearing, "heading": int(heading) % 360 if flight_number(heading) else -1,
+                 "altitude_m": int(round(altitude*.3048)) if flight_number(altitude) else -32768}
+            with self.lock:
+                f.update(self.metadata(callsign))
+            f["eligible"] = bool(self.CALLSIGN.fullmatch(callsign) and self.AIRLINER.match(model)
+                                 and f.get("airline") and flight_number(altitude))
+            aircraft.append(f)
+        aircraft.sort(key=lambda f: (f["distance_m"], f["hex"]))
+        changed = False
+        with self.lock:
+            for f in aircraft:
+                key = f["hex"] + ":" + f["callsign"]
+                inside = f["distance_m"] <= self.alert_radius
+                rec = self.tracks.setdefault(key, {"armed": not (inside and not self.baseline),
+                                                   "last_alert": 0, "far_since": 0})
+                rec["seen"] = now
+                if f["distance_m"] > self.alert_radius + 2000:
+                    if not rec.get("far_since"):
+                        rec["far_since"] = now
+                    if now - rec["far_since"] >= 120:
+                        rec["armed"] = True
+                else:
+                    rec["far_since"] = 0
+                if (self.baseline and inside and f["eligible"] and now-f["observed_at"] <= 15
+                        and rec.get("armed") and now-rec.get("last_alert", 0) >= 1800):
+                    self.last_id = max(self.last_id+1, int(now*1000))
+                    self.events.append({"id": self.last_id, "at": int(now), "flight": dict(f)})
+                    self.events = self.events[-3:]
+                    rec.update(armed=False, last_alert=now)
+                    changed = True
+                    log("flight: nearby", f["flight"] if f.get("flight") else f["callsign"], f["distance_m"], "m")
+            self.tracks = {k: v for k, v in self.tracks.items() if now-v.get("seen", 0) < 86400}
+            self.baseline, self.aircraft, self.fetched_at, self.ok = True, aircraft[:8], int(stamp), True
+            if changed:
+                save_state("flights.json", {"last_id": self.last_id, "tracks": self.tracks})
+
+    def poll(self):
+        url = (f"https://opendata.adsb.fi/api/v3/lat/{self.lat:.6f}/lon/{self.lon:.6f}"
+               f"/dist/{math.ceil(self.radius/1852)}")
+        self.ingest(self.get_json(url))
+
+    def loop(self):
+        failures = 0
+        while True:
+            delay = 10
+            try:
+                self.poll()
+                failures = 0
+            except (OSError, ValueError, TypeError, AttributeError, http.client.HTTPException) as e:
+                failures += 1
+                delay = min(300, 30 * 2**min(failures-1, 4))
+                if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                    retry = e.headers.get("Retry-After", "")
+                    if retry.isdigit():
+                        delay = max(delay, min(3600, int(retry)))
+                with self.lock:
+                    self.ok = False
+                if failures == 1 or failures % 10 == 0:
+                    log("flights: position fetch failed", type(e).__name__)
+            time.sleep(delay)
+
+    def snapshot(self):
+        with self.lock:
+            out = {"schema": 1, "configured": True, "ok": self.ok, "source": "adsb.fi",
+                   "place": self.place, "radius_m": int(self.radius), "alert_radius_m": int(self.alert_radius),
+                   "fetched_at": self.fetched_at, "aircraft": [dict(f) for f in self.aircraft],
+                   "events": [dict(e, flight=dict(e["flight"])) for e in self.events if self.clock()-e["at"] <= 60]}
+        # Keep the firmware's 8 KiB buffer invariant even for worst-case UTF-8 city names.
+        while len(json.dumps(out, ensure_ascii=False, separators=(",", ":")).encode()) > 8000:
+            if out["aircraft"]:
+                out["aircraft"].pop()
+            elif out["events"]:
+                out["events"].pop(0)
+            else:
+                break
+        return out
+
+
 CELL_RE = re.compile(r'<td[^>]*?data-date="(\d{4}-\d\d-\d\d)"[^>]*?id="([^"]+)"[^>]*?data-level="(\d)"')
 TIP_RE = re.compile(r'<tool-tip[^>]*?for="([^"]+)"[^>]*>([^<]*)</tool-tip>')
 
@@ -790,10 +1210,30 @@ def make_handler(hub, device_token, agent_tokens):
         def do_GET(self):
             if self.path == "/healthz":
                 return self.send_json(200, {"ok": True})
-            if self.path != "/api/device/status":
+            path = urllib.parse.urlsplit(self.path)
+            if path.path.startswith("/api/device/ota/images/"):
+                return self.ota_image(path.path)
+            is_calendar = path.path == "/api/device/calendar"
+            if not is_calendar and self.path not in ("/api/device/status", "/api/device/flights"):
                 return self.send_json(404, {"error": "not found"})
             if not hmac.compare_digest(self.bearer().encode(), device_token.encode()):
                 return self.send_json(401, {"error": "unauthorized"})
+            if is_calendar:
+                try:
+                    # Python 3.10 rejects an empty query under these flags;
+                    # newer Python versions return {}. Support both hosts.
+                    query = urllib.parse.parse_qs(path.query, strict_parsing=True, keep_blank_values=True) if path.query else {}
+                    if any(k not in ("day", "offset") or len(v) != 1 for k, v in query.items()):
+                        raise ValueError("invalid query")
+                    day = query.get("day", [None])[0]
+                    offset = int(query.get("offset", ["0"])[0])
+                    calendar = hub.calendar or CalendarHub(None, {})
+                    return self.send_json(200, calendar.snapshot(day, offset))
+                except (ValueError, OverflowError):
+                    return self.send_json(400, {"error": "invalid calendar query"})
+            if self.path == "/api/device/flights":
+                return self.send_json(200, hub.flights.snapshot() if hub.flights else
+                                      {"schema": 1, "configured": False})
             self.send_json(200, hub.snapshot())
 
         def read_body(self):
@@ -808,6 +1248,20 @@ def make_handler(hub, device_token, agent_tokens):
                 return None
 
         def do_POST(self):
+            if self.path in ("/api/device/ota/check", "/api/device/ota/report"):
+                if not hmac.compare_digest(self.bearer().encode(), device_token.encode()):
+                    return self.send_json(401, {"error": "unauthorized"})
+                body = self.read_body()
+                try:
+                    method = hub.ota.check if self.path.endswith("/check") else hub.ota.report
+                    result = method(body)
+                except (ValueError, TypeError, KeyError):
+                    return self.send_json(400, {"error": "invalid OTA request"})
+                except LookupError:
+                    return self.send_json(409, {"error": "OTA task unavailable"})
+                except OSError:
+                    return self.send_json(503, {"error": "OTA store unavailable"})
+                return self.send_json(200, result)
             if self.path == "/api/device/mi":
                 return self.mi_control()
             if self.path != "/api/agent/report":
@@ -823,6 +1277,30 @@ def make_handler(hub, device_token, agent_tokens):
             payload["name"] = name  # the token decides the name, not the body
             hub.report(payload)
             self.send_json(200, {"ok": True})
+
+        def ota_image(self, path):
+            if not hmac.compare_digest(self.bearer().encode(), device_token.encode()):
+                return self.send_json(401, {"error": "unauthorized"})
+            name = path.removeprefix("/api/device/ota/images/")
+            digest = name[:-4] if name.endswith(".bin") else ""
+            if not HEX64.fullmatch(digest):
+                return self.send_json(404, {"error": "release not found"})
+            try:
+                manifest, image = hub.ota.release(digest)
+                f = image.open("rb")
+            except (ValueError, OSError):
+                return self.send_json(404, {"error": "release not found"})
+            with f:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(manifest["size"]))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    while chunk := f.read(32768):
+                        self.wfile.write(chunk)
+                except (OSError, ssl.SSLError):
+                    pass  # an interrupted download never changes the running device slot
 
         def mi_control(self):
             if not hmac.compare_digest(self.bearer().encode(), device_token.encode()):
@@ -892,6 +1370,16 @@ def run_hub(args):
     threading.Thread(target=self_loop, daemon=True).start()
 
     ha_token = read_cred(creds, "ha_token", required=False)
+    calendar_conf = read_cred(creds, "calendar.json", required=False)
+    if ha_token and calendar_conf:
+        try:
+            config = json.loads(calendar_conf)
+            if config.get("enabled", True):
+                hub.calendar = CalendarHub(HomeAssistant(ha_token, port=int(os.environ.get("HA_PORT", "8123"))), config)
+                threading.Thread(target=hub.calendar.loop, daemon=True).start()
+                log("calendar: enabled via Home Assistant")
+        except (ValueError, TypeError, AttributeError):
+            log("calendar: bad configuration")
     mi_conf = read_cred(creds, "mihome.json", required=False)
     if ha_token and mi_conf:
         try:
@@ -902,6 +1390,18 @@ def run_hub(args):
         else:
             threading.Thread(target=hub.mihome.loop, daemon=True).start()
             log(f"mihome: {len(hub.mihome.devices)} device(s) via Home Assistant")
+
+    flight_conf = read_cred(creds, "flights.json", required=False)
+    if flight_conf:
+        try:
+            config = json.loads(flight_conf)
+            if config.get("enabled", True):
+                hub.flights = FlightRadar(config)
+                threading.Thread(target=hub.flights.loop, daemon=True).start()
+                threading.Thread(target=hub.flights.enrich_loop, daemon=True).start()
+                log("flights: enabled (adsb.fi + adsbdb)")
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            log("flights: bad configuration", type(e).__name__)
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2

@@ -10,13 +10,20 @@ SEC=secrets
 push() { # host unit-file credential-pairs...
   local host="$1" unit="$2"; shift 2
   local tmp; tmp="$(ssh "$host" mktemp -d)"
-  scp -q dashd.py "$unit" "$host:$tmp/"
+  scp -q dashd.py ota.py flight_coord_LICENSE.txt "$unit" "$host:$tmp/"
   local creds=()
   while [ $# -gt 0 ]; do scp -q "$1" "$host:$tmp/cred_$2"; creds+=("$2"); shift 2; done
   ssh "$host" "sudo -n bash -s" <<EOF
 set -e
+python3 -m py_compile $tmp/dashd.py
 install -d -m 755 /opt/esp-dash
+if [ -f /opt/esp-dash/dashd.py ]; then install -m 644 /opt/esp-dash/dashd.py /opt/esp-dash/dashd.py.previous; fi
+if [ -f /etc/systemd/system/$(basename "$unit") ]; then cp /etc/systemd/system/$(basename "$unit") /etc/systemd/system/$(basename "$unit").previous; fi
 install -m 644 $tmp/dashd.py /opt/esp-dash/dashd.py
+install -m 644 $tmp/ota.py /opt/esp-dash/ota.py
+install -d -m 755 /opt/esp-dash/firmware
+[ -e /opt/esp-dash/firmware/.lock ] || install -m 644 /dev/null /opt/esp-dash/firmware/.lock
+install -m 644 $tmp/flight_coord_LICENSE.txt /opt/esp-dash/flight_coord_LICENSE.txt
 install -d -m 700 /etc/esp-dash
 for c in ${creds[*]}; do install -m 600 -o root -g root $tmp/cred_\$c /etc/esp-dash/\$c; done
 install -m 644 $tmp/$(basename "$unit") /etc/systemd/system/$(basename "$unit")
@@ -38,11 +45,13 @@ agent_unit() { # name services -> path of a filled-in unit file
 
 deploy_hub() {
   # ha_token is written on the hub by set_ha_token.sh; an empty one just disables Mi Home
-  ssh esp-hub 'install -d -m 700 /etc/esp-dash; [ -e /etc/esp-dash/ha_token ] || install -m 600 /dev/null /etc/esp-dash/ha_token'
+  ssh esp-hub 'install -d -m 700 /etc/esp-dash; [ -e /etc/esp-dash/ha_token ] || install -m 600 /dev/null /etc/esp-dash/ha_token; [ -e /etc/esp-dash/flights.json ] || install -m 600 /dev/null /etc/esp-dash/flights.json'
+  local flight_creds=()
+  if [ -f "$SEC/flights.json" ]; then flight_creds=("$SEC/flights.json" flights.json); fi
   push esp-hub esp-dash-hub.service \
     certs/hub.pem hub.pem certs/hub.key hub.key \
     "$SEC/device_token" device_token "$SEC/agent_tokens.json" agent_tokens.json \
-    mihome.json mihome.json
+    mihome.json mihome.json calendar.json calendar.json "${flight_creds[@]}"
 }
 deploy_gcp() {
   push gcp-isbf "$(agent_unit gcp-isbf 'isbf-app=tcp:127.0.0.1:3000,caddy=tcp:127.0.0.1:443,docker=proc:dockerd')" \

@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "place": "Desk",
+  "coord_type": "wgs84",
+  "lon": 113.577305,
+  "lat": 22.355911,
+  "radius_m": 20000,
+  "alert_radius_m": 5000
+}

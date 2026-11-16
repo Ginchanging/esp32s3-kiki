@@ -1,7 +1,7 @@
 /*
- * UI task: owns LVGL. Until the ILI9341 arrives the display is "headless":
- * LVGL renders normally into a partial buffer; the flush callback either
- * drops the pixels or, in mirror mode, streams them to scripts/mirror.py:
+ * UI task: owns LVGL. Frames go to the ILI9341 (app_lcd.c); if the SPI bus
+ * cannot be set up the display stays "headless" and drops them. Either way,
+ * in mirror mode the flush callback also streams them to scripts/mirror.py:
  *
  *   @F <x1> <y1> <x2> <y2> <fnv1a-hex> <base64(RLE(RGB565 LE))>\n
  *
@@ -27,7 +27,6 @@
 #error "LVGL is not using third_party/lv_conf.h"
 #endif
 
-#define BUF_LINES 40
 #define MIRROR_ROWS 8 /* rows per serial line */
 #define MIRROR_PX (DASH_UI_W * MIRROR_ROWS)
 
@@ -149,12 +148,43 @@ static void headless_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *p
     lv_display_flush_ready(disp);
 }
 
+static void lcd_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
+{
+    flushes++;
+    flush_px += (uint32_t)lv_area_get_size(area);
+    if (app_mirror_active()) {
+        mirror_send(area, (const uint16_t *)px); /* before app_lcd_draw byte-swaps it */
+    }
+    if (!app_lcd_draw(area->x1, area->y1, area->x2, area->y2, (uint16_t *)px)) {
+        lv_display_flush_ready(disp); /* nothing queued, so LVGL won't wait */
+    }
+}
+
+static void lcd_flush_wait(lv_display_t *disp)
+{
+    (void)disp;
+    app_lcd_wait();
+}
+
 static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
+    static bool ft_last; /* the last press came from the real screen */
+    static int fx, fy;
     int x, y;
     bool pressed;
-    /* one queued event per read, so LVGL sees every press/move/release */
+    /* mirror window first: one queued event per read, so LVGL sees every press/move/release */
     app_touch_get(&x, &y, &pressed);
+    if (pressed) {
+        ft_last = false;
+    } else if (app_lcd_touch(&fx, &fy)) { /* then the FT6336 */
+        ft_last = true;
+        pressed = true;
+        x = fx;
+        y = fy;
+    } else if (ft_last) { /* release where the finger was */
+        x = fx;
+        y = fy;
+    }
     data->point.x = x;
     data->point.y = y;
     data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
@@ -163,12 +193,17 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
 static lv_display_t *display_create(void)
 {
     lv_display_t *disp = lv_display_create(DASH_UI_W, DASH_UI_H);
-    size_t bytes = DASH_UI_W * BUF_LINES * 2;
+    size_t bytes = DASH_UI_W * LCD_BUF_LINES * 2;
     void *b1 = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     void *b2 = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     lv_display_set_buffers(disp, b1, b2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_set_flush_cb(disp, headless_flush);
-    /* Touch: fed by the mirror window today, by the FT6336 later. */
+    if (app_lcd_init()) {
+        lv_display_set_flush_cb(disp, lcd_flush);
+        lv_display_set_flush_wait_cb(disp, lcd_flush_wait);
+    } else {
+        lv_display_set_flush_cb(disp, headless_flush);
+    }
+    /* Touch: the FT6336 plus clicks from the mirror window. */
     lv_indev_t *touch = lv_indev_create();
     lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(touch, touch_read);
@@ -224,6 +259,8 @@ static void apply_cat_request(const char *a)
         dash_ui_debug_time_offset((int64_t)n * 3600);
     } else if (!strcmp(a, "pomo")) {
         dash_ui_pomo_toggle();
+    } else if (!strcmp(a, "flight")) {
+        dash_ui_debug_flyover();
     } else if (!strcmp(a, "diary")) {
         diary_forced = 1;
     } else if (!strcmp(a, "diary week")) {
@@ -261,8 +298,11 @@ void ui_task(void *arg)
     app_nvs_get_u32("dash", "diary_day", &diary_day);
     dash_ui_set_pomo_cb(save_pomo);
     dash_ui_set_mi_cb(app_request_mi); /* taps on the 米家 page; the fetch task sends them */
+    dash_ui_set_calendar_cb(app_request_calendar);
     dash_ui_create(disp, lang == DASH_LANG_EN ? DASH_LANG_EN : DASH_LANG_ZH);
     dash_ui_set_lang_cb(save_lang);
+    lv_refr_now(disp);      /* draw the first frame while the backlight is still off */
+    app_lcd_backlight_on(); /* so the panel's power-on noise never shows */
     printf("dash: ui ready lang=%s heap=%u\n", lang == DASH_LANG_EN ? "en" : "zh",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
@@ -281,6 +321,10 @@ void ui_task(void *arg)
                 lv_obj_invalidate(lv_screen_active());
                 lv_obj_invalidate(lv_layer_top());
             }
+        }
+        if (app_lcd_poll()) { /* LCD settings changed: redraw with the new orientation/colours */
+            lv_obj_invalidate(lv_screen_active());
+            lv_obj_invalidate(lv_layer_top());
         }
         char cat_req[64];
         if (app_take_cat_request(cat_req, sizeof(cat_req))) {
@@ -357,6 +401,14 @@ void ui_task(void *arg)
 
         int64_t t0 = esp_timer_get_time();
         uint32_t wait = lv_timer_handler();
+        app_ota_ui_tick();
+        static uint8_t ota_shown;
+        uint8_t ota_number = dash_ui_ota_countdown_visible();
+        if (ota_number != ota_shown) {
+            lv_refr_now(disp);
+            ota_shown = ota_number;
+            app_ota_ui_presented(ota_number);
+        }
         uint32_t busy = (uint32_t)((esp_timer_get_time() - t0) / 1000);
         busy_total += busy;
         if (busy > busy_max) {

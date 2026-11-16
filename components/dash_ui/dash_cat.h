@@ -31,6 +31,7 @@ typedef struct {
     dash_activity_t activity;
     dash_cat_mood_t mood;
     dash_pomo_phase_t pomo;
+    dash_idle_state_t idle;
 } dash_cat_ctx_t;
 
 /* Creates the 128x128 cat at (x, y) inside parent. Returns the clickable image object. */

@@ -120,7 +120,7 @@ static int mi_kind(const char *kind)
 }
 
 /* "mihome": {"ok": true, "devices": [{"id","kind","name_zh","name_en","online",
- *             lamp/switch: "on","bri"   washer: "state","left_min","pct"
+ *             lamp/switch: "on","bri"   washer: "state","eta","pct"
  *             dispenser: "state","temp","tds","filters":[a,b]
  *             scale: "at","d_last","d_30","hist":[30 x 0.1 kg or null]}]}
  * -> st (absent object = Mi Home not configured; unknown kinds are skipped) */
@@ -151,10 +151,10 @@ static void parse_mihome(dash_state_t *st, const cJSON *mi)
         m->state = (uint8_t)mi_state(json_str(d, "state"));
         m->online = json_bool(d, "online", false);
         m->on = json_bool(d, "on", false);
-        double bri = json_num(d, "bri", -1), pct = json_num(d, "pct", -1), left = json_num(d, "left_min", -1);
+        double bri = json_num(d, "bri", -1), pct = json_num(d, "pct", -1);
         m->bri = (int8_t)(bri < 0 ? -1 : bri > 100 ? 100 : bri);
         m->pct = (int8_t)(pct < 0 ? -1 : pct > 100 ? 100 : pct);
-        m->left_min = (int16_t)(left < 0 ? -1 : left > 9999 ? 9999 : left);
+        m->eta = (int64_t)json_num(d, "eta", 0);
         m->temp_c = json_i16(d, "temp");
         m->tds = json_i16(d, "tds");
         const cJSON *filters = cJSON_GetObjectItemCaseSensitive(d, "filters");

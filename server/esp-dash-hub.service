@@ -18,6 +18,8 @@ LoadCredential=agent_tokens.json:/etc/esp-dash/agent_tokens.json
 # Mi Home via the local Home Assistant (server/homeassistant/); ha_token may be empty
 LoadCredential=ha_token:/etc/esp-dash/ha_token
 LoadCredential=mihome.json:/etc/esp-dash/mihome.json
+LoadCredential=flights.json:/etc/esp-dash/flights.json
+LoadCredential=calendar.json:/etc/esp-dash/calendar.json
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=yes

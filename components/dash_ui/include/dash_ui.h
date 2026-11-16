@@ -17,18 +17,24 @@ extern "C" {
 
 #define DASH_UI_W 240
 #define DASH_UI_H 320
-#define DASH_UI_PAGES 6 /* 0 Kiki's room, 1 GitHub, 2 servers, 3 pomodoro, 4 mailbox, 5 Mi Home */
+#define DASH_UI_PAGES 8 /* 0 room, 1 GitHub, 2 servers, 3 pomodoro, 4 mailbox, 5 Mi Home, 6 flights, 7 calendar */
 
 typedef void (*dash_ui_lang_cb_t)(dash_lang_t lang);
 typedef void (*dash_ui_pomo_cb_t)(int count, int minutes, int yday);
 /* Mi Home control request from a tap: on = 0/1 (-1 keep), bri = 1..100 (-1 keep). The app sends it
  * to the hub; the card shows "..." until the device state follows, or "failed" after 12 s. */
 typedef void (*dash_ui_mi_cb_t)(const char *dev, int on, int bri);
+typedef void (*dash_ui_calendar_cb_t)(int32_t day, uint16_t offset);
 
 void dash_ui_create(lv_display_t *disp, dash_lang_t lang);
+/* Double-tap on any page (not on a button) -> Kiki's room. dash_ui_create() attaches every
+ * pointer device that already exists; call this for one created afterwards. */
+void dash_ui_attach_indev(lv_indev_t *indev);
 
 /* Refresh every widget from *st. Call about once a second and after changes. */
 void dash_ui_update(const dash_state_t *st, int64_t now_utc);
+/* Main UI task acknowledges this number only after a completed display refresh. */
+uint8_t dash_ui_ota_countdown_visible(void);
 
 /* A new hub event: Kiki reacts; a popup appears when Kiki is not on screen. */
 void dash_ui_on_event(const dash_event_t *e);
@@ -54,6 +60,8 @@ void dash_ui_pomo_toggle(void); /* start / pause / resume */
 
 /* Mi Home */
 void dash_ui_set_mi_cb(dash_ui_mi_cb_t cb);
+/* Read-only calendar requests; the callback queues work outside the LVGL task. */
+void dash_ui_set_calendar_cb(dash_ui_calendar_cb_t cb);
 /* A DASH_EVK_MI_DONE event -> a mailbox message in the current language (false for other events). */
 bool dash_ui_mi_event_msg(const dash_state_t *st, const dash_event_t *e, dash_muse_msg_t *out);
 
@@ -86,6 +94,7 @@ void dash_ui_debug_night(int mode);
 void dash_ui_debug_react(int reaction); /* dash_cat_react_t */
 bool dash_ui_debug_look(const char *name);
 void dash_ui_debug_time_offset(int64_t seconds); /* shift the routine clock */
+void dash_ui_debug_flyover(void); /* explicitly labelled demo, no live event or LED side effects */
 
 #ifdef __cplusplus
 }

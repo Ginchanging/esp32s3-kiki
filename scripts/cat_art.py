@@ -105,7 +105,7 @@ class Layer:
 HEAD = (16, 13.5)  # face anchor used by the face layers
 
 
-def head(L, cx=16, cy=13.5):
+def head(L, cx=16, cy=13.5, stripe_dy=0):
     L.poly([(cx - 10.5, cy - 3), (cx - 8, cy - 11), (cx - 3.5, cy - 7)], "o")   # left ear
     L.poly([(cx + 10.5, cy - 3), (cx + 8, cy - 11), (cx + 3.5, cy - 7)], "o")   # right ear
     L.ellipse(cx, cy, 11, 8.3, "o")
@@ -119,7 +119,7 @@ def head(L, cx=16, cy=13.5):
         L.ellipse(cx, cy + 6.6, 3.6, 1.7, "c")
     for x, y in ((0, -7), (-1, -6), (1, -6), (-2, -7), (2, -7), (0, -5)):        # tabby "M"
         L.set(int(cx) + x - (1 if x <= 0 else 0) + (1 if x > 0 else 0) - 1, int(cy) + y, "d")
-    for y in (12, 14):                                                           # cheek stripes
+    for y in (12+stripe_dy, 14+stripe_dy):                                        # cheek stripes
         L.pixels("d", [(int(cx) - 11, y), (int(cx) - 10, y), (int(cx) + 9, y), (int(cx) + 10, y)])
 
 
@@ -134,7 +134,7 @@ TAILS = {
 }
 
 
-def body_sit(arms_up=False, tail_kind="a", wash=False, puff=False):
+def body_sit(arms_up=False, tail_kind="a", puff=False):
     L = Layer()
     if puff:
         L.stroke(TAILS["puff"], 2.4, "o", stripe="d", every=2)
@@ -146,8 +146,6 @@ def body_sit(arms_up=False, tail_kind="a", wash=False, puff=False):
     if arms_up:   # paws raised in front of the chest (holding something)
         L.ellipse(11.5, 22.5, 2.3, 1.8, "c")
         L.ellipse(20.5, 22.5, 2.3, 1.8, "c")
-    if wash:      # one paw up at the cheek
-        L.ellipse(22, 17.5, 2.2, 2.0, "c")
     # (puff: the bushy tail alone reads better than extra fur pixels)
     L.ellipse(12, 30, 2.4, 1.6, "c")
     L.ellipse(20, 30, 2.4, 1.6, "c")
@@ -155,6 +153,56 @@ def body_sit(arms_up=False, tail_kind="a", wash=False, puff=False):
     if arms_up:
         L.pixels("k", [(10, 21), (11, 21), (12, 21), (13, 21), (19, 21), (20, 21), (21, 21), (22, 21)])
     L.pixels("k", [(16, 29), (16, 30), (15, 31), (17, 31)])   # gap between feet
+    return L
+
+
+def body_groom():
+    """Head lowered toward a connected orange foreleg, with tiny cream toes."""
+    L = Layer()
+    tail(L, TAILS["a"])
+    L.ellipse(16, 24.5, 8.3, 6.8, "o")
+    L.ellipse(16, 25.5, 4.6, 4.6, "c")
+    head(L, cy=15.5, stripe_dy=2)
+    L.ellipse(12, 30, 2.4, 1.6, "c")
+    L.ellipse(20, 30, 2.4, 1.6, "c")
+    L.outline()
+    L.pixels("k", [(16, 29), (16, 30), (15, 31), (17, 31)])
+    paw = Layer()
+    paw.stroke([(23, 26), (21, 24), (18.5, 23)], 1.6, "o")
+    paw.ellipse(18, 22.5, 2.1, 1.6, "o")
+    paw.outline()
+    paw.pixels("c", [(17, 21), (18, 21)])
+    return compose(L, paw)
+
+
+def body_window(tail_kind="a"):
+    """A room-sized rear view, facing the upper-left window, head still.
+
+    Pose reference: Octavi Navarro, Cat Cafe #01,
+    https://x.com/OctaviNavarro/status/1093242223255322638
+    This is Kiki's own geometry/palette; the outdoor back layers stay separate.
+    """
+    L = Layer()
+    tail(L, TAILS[tail_kind])
+    L.ellipse(16.5, 24.5, 8.1, 6.8, "o")
+    L.ellipse(12, 30, 2.4, 1.6, "o")
+    L.ellipse(20, 30, 2.4, 1.6, "o")
+    # Head leans toward the window; the ears show their orange backs.
+    cx, cy = 14.5, 12.5
+    L.ellipse(cx, cy, 10.5, 8.0, "o")
+    L.poly([(cx-10, cy-2), (cx-8, cy-10.5), (cx-3.5, cy-6)], "o")
+    L.poly([(cx+10, cy-2), (cx+8, cy-10.5), (cx+3.5, cy-6)], "o")
+    L.pixels("d", [(7, 5), (8, 6), (21, 5), (20, 6),
+                   (10, 6), (10, 7), (10, 8), (18, 6), (18, 7), (18, 8),
+                   (13, 7), (14, 7), (13, 8), (14, 8), (13, 9), (14, 9),
+                   (5, 13), (6, 14), (23, 13), (22, 14),
+                   (12, 23), (13, 24), (20, 23), (19, 24),
+                   (11, 26), (12, 27), (21, 26), (20, 27)])
+    # Merge the neck/head/body before outlining. No horizontal mark that
+    # could look like a mouth on the back of the head.
+    L.pixels("d", [(13, 18), (14, 19), (14, 20)])
+    L.outline()
+    L.pixels("k", [(16, 30), (16, 31)])
     return L
 
 
@@ -172,20 +220,139 @@ def body_jump():
     return L
 
 
-def body_sleep(breath=0.0):
+def resting_head(L):
+    L.ellipse(10, 22.5, 7.6, 6.2, "o")
+    L.poly([(3.2, 20), (4.2, 12.5), (8.6, 17)], "o")
+    L.poly([(11.4, 17), (15.8, 12.5), (16.8, 20)], "o")
+    L.poly([(4.3, 18.3), (4.8, 14.6), (7.2, 17.2)], "p")
+    L.poly([(12.8, 17.2), (15.2, 14.6), (15.7, 18.3)], "p")
+
+
+def body_sleep(breath=0.0, awake=False):
     L = Layer()
     L.ellipse(18.5, 24.5 - breath / 2, 12.2, 6.3 + breath, "o")    # curled body
     for x in (19, 22, 25, 28):                                     # back stripes
         L.pixels("d", [(x, 19), (x, 20)])
-    L.ellipse(10, 22.5, 7.6, 6.2, "o")                             # head resting on the left
-    L.poly([(3.2, 20), (4.2, 12.5), (8.6, 17)], "o")              # ears
-    L.poly([(11.4, 17), (15.8, 12.5), (16.8, 20)], "o")
-    L.poly([(4.3, 18.3), (4.8, 14.6), (7.2, 17.2)], "p")
-    L.poly([(12.8, 17.2), (15.2, 14.6), (15.7, 18.3)], "p")
-    L.ellipse(10, 25.4, 3.6, 2.0, "c")                             # muzzle
+    resting_head(L)
+    if not awake:
+        L.ellipse(10, 25.4, 3.6, 2.0, "c")                         # preserve the existing sleep pose
     L.stroke([(29, 26.5), (26, 29.6), (18, 30.4), (9, 30.2)], 1.3, "o", stripe="d", every=2)  # tail in front
     L.outline()
     return L
+
+
+def body_stretch(phase=0):
+    """A play bow, hips raised and front paws planted on the same floor."""
+    L = Layer()
+    tail(L, [(24, 23), (28, 20), (29, 15), (27, 13)])
+    L.ellipse(22, 22-phase*0.5, 7.5, 6.5, "o")
+    L.poly([(15, 22), (23, 22), (25, 29), (20, 30), (13, 27)], "o")
+    L.stroke([(16, 25), (10, 29), (5, 29.5)], 1.7, "o")
+    L.stroke([(19, 26), (14, 30), (9, 30)], 1.5, "o")
+    L.ellipse(5, 30, 2.5, 1.3, "c")
+    L.ellipse(10, 30.5, 2.5, 1, "c")
+    L.ellipse(24, 30, 2.6, 1.4, "c")
+    for x in (21, 24, 27):
+        L.pixels("d", [(x, 17-phase), (x, 18-phase)])
+    resting_head(L)
+    L.outline()
+    L.pixels("d", [(18, 26), (17, 27), (16, 28)])
+    return L
+
+
+def head_back():
+    """A fixed rear-view head; the outdoor animation never turns it."""
+    L = Layer()
+    L.ellipse(16, 10.7, 7.5, 5.8, "o")
+    L.poly([(8.5, 10), (9, 3), (14, 6)], "o")
+    L.poly([(18, 6), (23, 3), (23.5, 10)], "o")
+    L.pixels("y", [(9, 5), (10, 6), (11, 6), (22, 5), (21, 6), (20, 6)])
+    L.pixels("d", [(15, 6), (16, 6), (15, 7), (16, 7),
+                   (12, 7), (12, 8), (19, 7), (19, 8),
+                   (10, 13), (11, 14), (20, 14), (21, 13)])
+    return L
+
+
+def body_back(tail_phase=0):
+    """Fixed seated back and head, with three gentle tail positions behind the hip."""
+    paths = [
+        [(20, 27), (23.5, 29), (28, 29), (30, 27.5)],
+        [(20, 27), (23.5, 29), (27, 28.3), (29, 26)],
+        [(20, 27), (23.5, 29), (26.8, 27.2), (27, 24.8)],
+    ]
+    stripes = [
+        [(24, 28), (24, 29), (27, 28), (27, 29)],
+        [(24, 28), (24, 29), (27, 27), (28, 27)],
+        [(24, 27), (25, 28), (26, 25), (27, 25)],
+    ]
+    T = Layer()
+    T.stroke(paths[tail_phase], 1.25, "o")
+    for x, y in stripes[tail_phase]:
+        if T.get(x, y) != ".":
+            T.set(x, y, "d")
+    T.outline()
+    L = Layer()
+    L.poly([(13, 12), (19, 12), (20, 16), (22, 20), (23, 24),
+            (22, 28), (20, 30), (12, 30), (9, 28), (8, 24), (10, 20), (12, 16)], "o")
+    L.ellipse(16, 23, 7.2, 7.0, "o")
+    L.poly([(9, 23), (10, 26), (12, 28), (19, 29), (21, 28),
+            (20, 30), (12, 30), (10, 29), (9, 27)], "d")
+    L.pixels("y", [(11, 19), (10, 21), (10, 22), (11, 23), (12, 23)])
+    L.pixels("d", [(12, 18), (13, 19), (14, 19), (19, 19), (20, 18),
+                   (10, 22), (11, 22), (12, 23), (21, 22), (20, 23),
+                   (10, 25), (11, 25), (12, 26), (21, 25), (20, 26)])
+    L = compose(L, head_back())
+    L.outline()
+    return compose(T, L)
+
+
+def body_side(typing=False):
+    """Kiki at the desk in 3/4 view, turned right toward the laptop. Chibi sprites keep the
+    big round head and both eyes in this view; the face just slides toward the screen.
+    The face is part of this layer (the front-facing mood faces would not fit)."""
+    cx, cy = 12.5, 13
+    T = Layer()                                                           # tail, outlined on its own
+    T.stroke([(6, 29.6), (2.6, 28.6), (1.5, 25), (2.4, 21.4)], 1.3, "o", stripe="d", every=2)
+    T.outline()
+    L = Layer()
+    L.ellipse(12, 24.8, 7.6, 6.5, "o")                                    # body, turned right
+    L.ellipse(14.4, 25.6, 3.7, 4.2, "c")                                  # belly
+    L.ellipse(8.8, 30.2, 2.3, 1.5, "c"); L.ellipse(15.6, 30.2, 2.3, 1.5, "c")   # hind feet
+    lift = -1.0 if typing else 0.0
+    for (sx, sy), (px, py) in (((17.2, 24.2), (23.0, 21.2)), ((16.2, 22.8), (20.6, 20.8 + lift))):
+        L.stroke([(sx, sy), (px - 1.2, py + 0.2)], 1.35, "o")            # front legs to the keys
+        L.ellipse(px, py, 1.9, 1.25, "c")
+    head(L, cx, cy)
+    L.outline()
+    ey, el, er, m = int(cy) - 1, 10, 17, 15                              # eyes and mouth slid right
+    for ex in (el, er):
+        L.rect(ex, ey, ex + 1, ey + 2, "k"); L.set(ex, ey, "w")
+    L.pixels("p", [(m - 1, ey + 3), (m, ey + 3)])                         # nose
+    L.pixels("k", [(m - 1, ey + 5), (m, ey + 5)])                         # mouth
+    L.pixels("p", [(el - 3, ey + 4), (el - 2, ey + 4), (er + 3, ey + 4)])  # blush
+    return compose(T, L)
+
+
+def desk(code="a"):
+    """Low desk on the right; the laptop's screen faces Kiki and, at an angle, us."""
+    P = Layer()
+    P.rect(18, 23, 31, 24, "n")                                          # table top
+    P.rect(20, 25, 21, 31, "n"); P.rect(29, 25, 30, 31, "n")             # legs
+    P.rect(19, 21, 30, 22, "s")                                          # laptop base
+    for x in range(21, 29, 2):
+        P.set(x, 21, "m")                                                # keys
+    for y in range(13, 21):                                              # lid, leaning back
+        x0 = 25 + (20 - y) // 4
+        P.rect(x0, y, 29, y, "m")                                        # screen
+        P.set(30, y, "s")                                                # lid edge
+    rows = {"a": ((14, "g", 3), (16, "y", 2), (18, "B", 3)),
+            "b": ((14, "g", 2), (16, "B", 3), (18, "w", 1))}[code]
+    for y, c, n in rows:
+        x0 = 26 + (20 - y) // 4
+        for i in range(n):
+            P.set(x0 + i, y, c)
+    P.outline()
+    return P
 
 
 # ------------------------------------------------------------------ faces (anchor = HEAD)
@@ -280,6 +447,21 @@ def face(kind, cx=16, cy=13.5):
     elif kind == "sleep_closed":   # for the curled pose (head at 10, 22.5)
         F.pixels("k", [(5, 22), (6, 23), (7, 23), (8, 22), (11, 22), (12, 23), (13, 23), (14, 22)])
         F.pixels("p", [(9, 24), (10, 24), (4, 24), (15, 24)])
+    elif kind in ("rest", "rest_blink"):
+        for ex in (6, 12):
+            F.pixels("k", [(ex, 22), (ex+1, 22)])
+            if kind == "rest":
+                F.set(ex, 23, "k")
+                F.set(ex, 22, "w")
+        F.pixels("p", [(9, 24), (10, 24)])
+        F.pixels("k", [(9, 26), (10, 26)])
+    elif kind in ("groom", "groom_lick"):
+        for ex in (ex_l, ex_r):
+            F.pixels("k", [(ex-1, 15), (ex, 16), (ex+1, 16), (ex+2, 15)])
+        F.pixels("p", [(15, 18), (16, 18)])
+        F.pixels("k", [(15, 19), (16, 19)])
+        if kind == "groom_lick":
+            F.pixels("r", [(16, 20), (17, 20)])
     return F
 
 
@@ -299,22 +481,21 @@ def prop(kind):
         for y in (22, 24):
             P.pixels("s", [(11, y), (12, y), (13, y), (18, y), (19, y), (20, y)])
         P.outline()
-    elif kind == "laptop":
-        P.rect(8, 19, 23, 27, "s")
-        P.rect(9, 20, 22, 26, "m")
-        for x, y, c in ((10, 21, "g"), (11, 21, "g"), (13, 21, "y"), (14, 21, "y"), (10, 23, "B"),
-                        (11, 23, "B"), (12, 23, "B"), (14, 23, "g"), (15, 23, "g"), (11, 25, "v"), (12, 25, "v")):
-            P.set(x, y, c)
-        P.rect(6, 28, 25, 29, "s")
+    elif kind == "sign":     # a board held up in front of the chest, paws on its top edge
+        P.rect(6, 19, 25, 28, "l")
+        for x in range(9, 18):
+            P.set(x, 22, "s")
+        for x in range(9, 15):
+            P.set(x, 25, "s")
+        P.pixels("r", [(19, 22), (20, 22), (22, 22), (23, 22), (19, 23), (20, 23), (21, 23), (22, 23), (23, 23),
+                       (20, 24), (21, 24), (22, 24), (21, 25)])           # heart
         P.outline()
-    elif kind == "sign":     # paper sign held up above the head
-        P.rect(6, 1, 25, 8, "l")
-        P.rect(15, 9, 16, 12, "n")
-        for x in range(8, 24, 2):
-            P.set(x, 4, "s")
-        for x in range(9, 22, 3):
-            P.set(x, 6, "s")
-        P.outline()
+        Q = Layer()
+        for cx in (8.5, 23.5):
+            Q.ellipse(cx, 19.2, 2.3, 1.8, "c")
+        Q.outline()
+        Q.pixels("k", [(8, 20), (23, 20)])                                # toes
+        P = compose(P, Q)
     elif kind == "sweat":
         P.pixels("B", [(26, 6), (25, 7), (26, 7), (25, 8), (26, 8)])
         P.set(26, 8, "w")
@@ -340,14 +521,6 @@ def prop(kind):
         P.rect(17, 19, 21, 24, "l")
         P.pixels("s", [(11, 22), (12, 22), (13, 22), (11, 24), (12, 24), (13, 24), (18, 20), (19, 20), (20, 21)])
         P.outline()
-    elif kind == "laptop_b":
-        P.rect(8, 19, 23, 27, "s")
-        P.rect(9, 20, 22, 26, "m")
-        for x, y, c in ((10, 21, "g"), (11, 21, "g"), (12, 21, "g"), (14, 21, "B"), (10, 23, "y"),
-                        (11, 23, "y"), (13, 23, "g"), (14, 23, "g"), (15, 23, "g"), (10, 25, "v"), (11, 25, "v"), (12, 25, "w")):
-            P.set(x, y, c)
-        P.rect(6, 28, 25, 29, "s")
-        P.outline()
     elif kind == "bowl":     # milk / rice bowl on the floor in front
         P.rect(8, 26, 23, 26, "c")
         P.rect(8, 27, 23, 29, "B")
@@ -362,10 +535,6 @@ def prop(kind):
         P.ellipse(27, 28, 3.6, 3.4, "v")
         P.pixels("l", [(25, 27), (26, 26), (28, 28), (27, 30), (29, 26)])
         P.stroke([(23.5, 29), (20, 30.5), (16, 30.8)], 0.5, "v")
-        P.outline()
-    elif kind == "headphones":
-        P.stroke([(5.5, 13), (6, 6), (16, 2.2), (26, 6), (26.5, 13)], 0.6, "m")
-        P.rect(3, 11, 6, 16, "r"); P.rect(26, 11, 29, 16, "r")
         P.outline()
     elif kind == "heart":
         P.pixels("r", [(26, 3), (27, 3), (29, 3), (30, 3), (25, 4), (26, 4), (27, 4), (28, 4), (29, 4), (30, 4),
@@ -391,6 +560,16 @@ def prop(kind):
     return P
 
 
+def side_phones():
+    """Headphones on the 3/4 head: near cup on the left cheek, the far one just peeking out."""
+    P = Layer()
+    P.stroke([(3.6, 11), (4.6, 5.4), (12.5, 2.0), (20.5, 4.6), (22.4, 10)], 0.6, "m")
+    P.rect(1, 10, 4, 15, "r")
+    P.rect(22, 10, 23, 14, "r")
+    P.outline()
+    return P
+
+
 def compose(*layers):
     out = Layer()
     for L in layers:
@@ -405,21 +584,37 @@ SPRITES = {
     "body_sit": body_sit(),
     "body_sit_b": body_sit(tail_kind="b"),
     "body_hold": body_sit(arms_up=True),
-    "body_wash": body_sit(wash=True),
+    "body_wash": body_groom(),
+    "body_window": body_window(),
+    "body_window_b": body_window("b"),
+    "body_rest": body_sleep(awake=True),
+    "body_rest_b": body_sleep(breath=0.6, awake=True),
+    "body_stretch": body_stretch(),
+    "body_stretch_b": body_stretch(1),
     "body_puff": body_sit(puff=True),
     "body_jump": body_jump(),
     "body_jump_hi": body_jump().shift(0, -2),
     "body_sleep": body_sleep(),
     "body_sleep_b": body_sleep(breath=0.6),
+    "body_back": body_back(),
+    "body_back_tail_mid": body_back(1),
+    "body_back_tail_up": body_back(2),
+    "side_body": body_side(),
+    "side_body_b": body_side(typing=True),
+    "side_desk": desk("a"),
+    "side_desk_b": desk("b"),
+    "side_phones": side_phones(),
     **{f"face_{k}": face(k) for k in ("normal", "blink", "happy", "worried", "shocked", "sleepy", "yawn",
                                       "confused", "chew", "chew_b", "meow", "focus", "lick")},
     "face_jump": face("happy", cy=12.5),
     "face_jump_hi": face("happy", cy=12.5).shift(0, -2),
     "face_sleep_closed": face("sleep_closed"),
     "face_sleep_smile": face("sleep_smile"),
-    **{f"prop_{k}": prop(k) for k in ("fish", "book", "book_b", "laptop", "laptop_b", "sign", "bowl",
-                                      "rope_over", "rope_under", "yarn", "headphones", "heart", "sun",
+    **{f"face_{k}": face(k) for k in ("groom", "groom_lick", "rest", "rest_blink")},
+    **{f"prop_{k}": prop(k) for k in ("fish", "book", "book_b", "sign", "bowl",
+                                      "rope_over", "rope_under", "yarn", "heart", "sun",
                                       "sweat", "bang", "question", "note", "zzz", "zzz_b", "confetti", "confetti_b")},
+    "prop_yarn_b": prop("yarn").shift(-2, 0),
 }
 
 # What the state machine draws, as (label, layers...) -- also the review sheet.
@@ -431,17 +626,28 @@ LOOKS = [
     ("rope 1", "body_jump_hi", "face_jump_hi", "prop_rope_under"), ("rope 2", "prop_rope_over", "body_hold", "face_happy"),
     ("milk", "body_sit", "face_lick", "prop_bowl"), ("fish", "body_hold", "face_chew_b", "prop_fish"),
     ("read", "body_sit", "face_normal", "prop_book"), ("read 2", "body_sit", "face_normal", "prop_book_b"),
-    ("code", "body_sit", "face_focus", "prop_laptop"), ("code 2", "body_sit", "face_focus", "prop_laptop_b"),
-    ("yarn", "body_sit_b", "face_happy", "prop_yarn"), ("wash", "body_wash", "face_lick"),
+    ("code", "side_desk", "side_body"), ("code 2", "side_desk_b", "side_body_b"),
+    ("yarn", "body_sit_b", "face_happy", "prop_yarn"), ("wash", "body_wash", "face_groom_lick"),
     ("nap/sleep", "body_sleep", "face_sleep_closed", "prop_zzz"), ("sleep 2", "body_sleep_b", "face_sleep_closed", "prop_zzz_b"),
-    ("sunbathe", "body_sleep", "face_sleep_smile", "prop_sun"), ("focus", "body_sit", "face_focus", "prop_headphones", "prop_laptop"),
+    ("sunbathe", "body_sleep", "face_sleep_smile", "prop_sun"), ("focus", "side_desk", "side_body", "side_phones"),
     ("CI pass", "body_jump", "face_jump", "prop_confetti"), ("CI pass 2", "body_jump_hi", "face_jump_hi", "prop_confetti_b"),
-    ("Muse", "body_hold", "face_meow", "prop_sign"), ("meow", "body_sit", "face_meow", "prop_heart"),
+    ("Muse", "body_sit", "face_meow", "prop_sign"), ("meow", "body_sit", "face_meow", "prop_heart"),
     ("milk 2", "body_sit", "face_chew", "prop_bowl"), ("fish 2", "body_hold", "face_chew", "prop_fish"),
-    ("dinner", "body_sit", "face_chew_b", "prop_bowl"), ("wash 2", "body_wash", "face_happy"),
+    ("dinner", "body_sit", "face_chew_b", "prop_bowl"), ("wash 2", "body_wash", "face_groom"),
     ("sun 2", "body_sleep_b", "face_sleep_smile", "prop_sun"),
-    ("focus 2", "body_sit", "face_focus", "prop_headphones", "prop_laptop_b"),
+    ("focus 2", "side_desk_b", "side_body_b", "side_phones"),
     ("alert", "body_sit", "face_shocked", "prop_bang"), ("puffed 2", "body_puff", "face_shocked"),
+    ("sky back", "body_back"), ("sky tail mid", "body_back_tail_mid"),
+    ("sky tail up", "body_back_tail_up"),
+    ("window", "body_window"),
+    ("window blink", "body_window"),  # retained debug name; the rear view has no visible eyes
+    ("window tail", "body_window_b"),
+    ("rest", "body_rest", "face_rest"), ("rest 2", "body_rest_b", "face_rest"),
+    ("rest blink", "body_rest", "face_rest_blink"),
+    ("stretch", "body_stretch", "face_rest_blink"),
+    ("stretch 2", "body_stretch_b", "face_rest_blink"),
+    ("drowsy", "body_sit", "face_sleepy"),
+    ("yarn 2", "body_sit", "face_happy", "prop_yarn_b"),
 ]
 
 
@@ -459,20 +665,6 @@ def render_sheet(path):
     from PIL import Image, ImageDraw
     S = SPRITES
     looks = [(lab, compose(*(S[n] for n in names))) for lab, *names in LOOKS]
-    _unused = [
-        ("normal", compose(S["body_sit"], S["face_normal"])),
-        ("happy", compose(S["body_sit"], S["face_happy"], S["prop_note"])),
-        ("worried", compose(S["body_sit"], S["face_worried"], S["prop_sweat"])),
-        ("shocked", compose(S["body_sit"], S["face_shocked"], S["prop_bang"])),
-        ("sleepy", compose(S["body_sit"], S["face_sleepy"])),
-        ("confused", compose(S["body_sit"], S["face_confused"], S["prop_question"])),
-        ("eating", compose(S["body_hold"], S["face_chew"], S["prop_fish"])),
-        ("reading", compose(S["body_sit"], S["face_normal"], S["prop_book"])),
-        ("coding", compose(S["body_sit"], S["face_happy"], S["prop_laptop"])),
-        ("CI pass: jump", compose(S["body_jump"], S["face_jump"], S["prop_confetti"])),
-        ("Muse: sign", compose(S["body_hold"], S["face_happy"], S["prop_sign"])),
-        ("sleeping", compose(S["body_sleep"], S["face_sleep_closed"], S["prop_zzz"])),
-    ]
     scale, pad, cols = 5, 14, 6
     cw, ch = W * scale + pad, H * scale + pad + 18
     rows = (len(looks) + cols - 1) // cols

@@ -305,7 +305,7 @@
         "name_en": "Washer",
         "online": true,
         "state": "spin",
-        "left_min": 12,
+        "eta": 1794544920,
         "pct": 70
       },
       {

@@ -1,6 +1,10 @@
 # Pure LVGL UI, shared by firmware and simulator. No ESP-IDF includes.
 set(DASH_UI_SRCS
     dash_ui.c
+    dash_flight_ui.c
+    dash_calendar_ui.c
+    dash_season.c
+    dash_ota_ui.c
     dash_i18n.c
     dash_cat.c
     dash_pix.c

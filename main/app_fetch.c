@@ -29,14 +29,14 @@ static void wipe(void *p, size_t n)
 
 /* GET (post == NULL) or POST a JSON body. Returns HTTP status (or -1 on transport
  * error); the reply lands in body/len. */
-static int hub_request(const char *url, const char *token, const char *post, int *len)
+int app_hub_json(const char *url, const char *token, const char *post, char *out, int cap, int *len)
 {
     esp_http_client_config_t cfg = {
         .url = url,
         .method = post ? HTTP_METHOD_POST : HTTP_METHOD_GET,
         .cert_pem = hub_pem_start,
         .common_name = DASH_HUB_CN,
-        .timeout_ms = 10000,
+        .timeout_ms = !strcmp(url, DASH_HUB_FLIGHTS_URL) ? 5000 : 10000,
         .buffer_size = 2048,
         .disable_auto_redirect = true,
     };
@@ -58,18 +58,25 @@ static int hub_request(const char *url, const char *token, const char *post, int
     *len = 0;
     if (esp_http_client_open(c, post_len) == ESP_OK &&
         (!post || esp_http_client_write(c, post, post_len) == post_len)) {
-        esp_http_client_fetch_headers(c);
+        int64_t declared_len = esp_http_client_fetch_headers(c);
         status = esp_http_client_get_status_code(c);
+        if (declared_len > cap || declared_len < 0) status = -1;
         int n;
-        while (*len < BODY_MAX &&
-               (n = esp_http_client_read(c, body + *len, BODY_MAX - *len)) > 0) {
+        while (status >= 0 && *len < cap &&
+               (n = esp_http_client_read(c, out + *len, cap - *len)) > 0) {
             *len += n;
         }
+        if (status >= 0 && !esp_http_client_is_complete_data_received(c)) status = -1;
     }
-    body[*len] = '\0';
+    out[*len] = '\0';
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
     return status;
+}
+
+static int hub_request(const char *url, const char *token, const char *post, int *len)
+{
+    return app_hub_json(url, token, post, body, BODY_MAX, len);
 }
 
 /* Demo mode has no hub: flip the demo state so the 米家 page still reacts. */
@@ -125,13 +132,17 @@ void fetch_task(void *arg)
     bool warned_no_token = false;
     char mi_dev[16];
     int mi_on, mi_bri;
+    int64_t next_status = 0, next_flight = 0, next_calendar = 0;
     for (;;) {
-        if (!campus_net_wait_online(5000)) {
+        if (!campus_net_wait_online(500)) {
             continue;
         }
-        if (!token_loaded || app_take_token_changed()) {
+        bool token_changed = app_take_token_changed();
+        if (!token_loaded || token_changed) {
             app_nvs_get_str("dash", "token", token, sizeof(token));
             token_loaded = campus_net_storage_ready();
+            next_status = next_flight = 0;
+            next_calendar = 0;
         }
         if (app_demo_active()) {
             if (app_take_mi_request(mi_dev, sizeof(mi_dev), &mi_on, &mi_bri)) {
@@ -150,25 +161,74 @@ void fetch_task(void *arg)
         }
         warned_no_token = false;
 
+        app_ota_poll(token, body, BODY_MAX);
+
+        if (app_take_mi_request(mi_dev, sizeof(mi_dev), &mi_on, &mi_bri)) {
+            mi_control(token, mi_dev, mi_on, mi_bri);
+        }
+        int64_t now_ms = esp_timer_get_time() / 1000;
+        int32_t day;
+        uint16_t offset;
+        uint32_t seq;
+        bool calendar_pending = app_take_calendar_request(&day, &offset, &seq);
+        if ((calendar_pending || now_ms >= next_calendar) && time(NULL) >= 1700000000) {
+            if (!day) day = dash_local_day(time(NULL));
+            time_t local_day = (time_t)((int64_t)day*86400);
+            struct tm tm;
+            gmtime_r(&local_day, &tm);
+            char url[180], date[16];
+            strftime(date, sizeof(date), "%Y-%m-%d", &tm);
+            snprintf(url, sizeof(url), DASH_HUB_CALENDAR_URL "?day=%s&offset=%u", date, (unsigned)offset);
+            int calendar_len = 0;
+            int http = hub_request(url, token, NULL, &calendar_len);
+            dash_state_t *s = app_lock();
+            bool current = app_calendar_current_locked(seq) && !app_demo_active();
+            bool success = current && http == 200 && dash_calendar_parse(&s->calendar, body, (size_t)calendar_len);
+            if (current) {
+                if (success) s->calendar.fetch_failures = 0;
+                else ++s->calendar.fetch_failures;
+            }
+            app_unlock(current);
+            printf("dash: calendar %s http=%d bytes=%d\n", !current ? "superseded" : success ? "ok" : "failed", http, calendar_len);
+            next_calendar = esp_timer_get_time()/1000+(success ? 60000 : 10000);
+            /* Keep the normal status/flight deadlines: an agenda request must
+             * not starve either one, even during rapid date selections. */
+            now_ms = esp_timer_get_time()/1000;
+        }
+        bool flight = now_ms < next_status;
+        if (flight && now_ms < next_flight) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
         int len = 0;
         int64_t t0 = esp_timer_get_time();
-        int status = hub_request(DASH_HUB_STATUS_URL, token, NULL, &len);
+        int status = hub_request(flight ? DASH_HUB_FLIGHTS_URL : DASH_HUB_STATUS_URL, token, NULL, &len);
         int ms = (int)((esp_timer_get_time() - t0) / 1000);
         bool ok = false;
         dash_state_t *st = app_lock();
         if (status == 200 && !app_demo_active()) {
-            ok = dash_model_parse(st, body, (size_t)len);
+            ok = flight ? dash_flights_parse(&st->flights, body, (size_t)len)
+                        : dash_model_parse(st, body, (size_t)len);
         }
-        if (ok) {
+        if (flight) {
+            if (ok) st->flights.fetch_failures = 0;
+            else if (!app_demo_active()) ++st->flights.fetch_failures;
+        } else if (ok) {
             st->fetch_failures = 0;
             st->last_fetch_ok = time(NULL);
             app_fetch_ok_now();
+            app_ota_hub_ok();
         } else if (!app_demo_active()) {
             st->fetch_failures++;
         }
         int runs = st->run_count, servers = st->server_count;
+        int aircraft = st->flights.count;
         app_unlock(true);
-        if (ok) {
+        if (flight) {
+            printf("dash: flights %s http=%d bytes=%d ms=%d aircraft=%d\n", ok ? "ok" : "failed",
+                   status, len, ms, aircraft);
+        } else if (ok) {
             printf("dash: fetch ok http=200 bytes=%d ms=%d runs=%d servers=%d\n", len, ms, runs,
                    servers);
         } else {
@@ -176,19 +236,9 @@ void fetch_task(void *arg)
                    status == 401 ? " (token rejected)" : "");
         }
 
-        /* sleep, but wake early when the token changes; Mi Home taps go out right away */
-        for (int waited = 0; waited < (ok ? DASH_FETCH_PERIOD_MS : 10000); waited += 500) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-            if (app_take_mi_request(mi_dev, sizeof(mi_dev), &mi_on, &mi_bri)) {
-                mi_control(token, mi_dev, mi_on, mi_bri);
-            }
-            if (app_take_token_changed()) {
-                app_nvs_get_str("dash", "token", token, sizeof(token));
-                break;
-            }
-            if (app_demo_active()) {
-                break;
-            }
-        }
+        int64_t done_ms = esp_timer_get_time() / 1000;
+        if (flight) next_flight = done_ms + DASH_FLIGHT_PERIOD_MS;
+        else next_status = done_ms + (ok ? DASH_FETCH_PERIOD_MS : 10000);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

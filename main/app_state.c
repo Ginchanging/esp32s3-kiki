@@ -18,6 +18,12 @@ static volatile bool lang_pending;
 static volatile dash_lang_t lang_requested;
 static volatile bool demo;
 static volatile bool token_changed, bemfa_changed, led_changed;
+static struct {
+    int32_t day;
+    uint16_t offset;
+    uint32_t seq;
+    bool pending;
+} calendar_query;
 
 typedef struct {
     int16_t ev, steps;
@@ -63,6 +69,30 @@ void app_unlock(bool changed)
     }
     xSemaphoreGive(lock);
 }
+
+void app_request_calendar(int32_t day, uint16_t offset)
+{
+    app_lock();
+    calendar_query.day = day;
+    calendar_query.offset = offset;
+    ++calendar_query.seq;
+    calendar_query.pending = true;
+    app_unlock(false);
+}
+
+bool app_take_calendar_request(int32_t *day, uint16_t *offset, uint32_t *seq)
+{
+    app_lock();
+    bool pending = calendar_query.pending;
+    calendar_query.pending = false;
+    *day = calendar_query.day;
+    *offset = calendar_query.offset;
+    *seq = calendar_query.seq;
+    app_unlock(false);
+    return pending;
+}
+
+bool app_calendar_current_locked(uint32_t seq) { return seq == calendar_query.seq; }
 
 bool app_take_dirty(void)
 {
@@ -118,6 +148,8 @@ extern const char fx_running_start[] asm("_binary_3_gh_running_json_start");
 extern const char fx_running_end[] asm("_binary_3_gh_running_json_end");
 extern const char fx_down_start[] asm("_binary_4_server_down_json_start");
 extern const char fx_down_end[] asm("_binary_4_server_down_json_end");
+extern const char fx_flight_start[] asm("_binary_9_flight_json_start");
+extern const char fx_flight_end[] asm("_binary_9_flight_json_end");
 
 bool app_demo_load(const char *name)
 {
@@ -130,6 +162,8 @@ bool app_demo_load(const char *name)
         start = fx_running_start, end = fx_running_end;
     } else if (!strcmp(name, "server_down")) {
         start = fx_down_start, end = fx_down_end;
+    } else if (!strcmp(name, "flight")) {
+        start = fx_flight_start, end = fx_flight_end;
     }
     if (!start) {
         return false;
@@ -138,6 +172,11 @@ bool app_demo_load(const char *name)
     bool ok = dash_model_parse(st, start, (size_t)(end - start));
     if (ok) {
         int64_t now = time(NULL);
+        memset(&st->flights, 0, sizeof(st->flights));
+        if (dash_flights_parse(&st->flights, start, (size_t)(end-start))) {
+            st->flights.fetched_at = now;
+            for (int i = 0; i < st->flights.count; ++i) st->flights.aircraft[i].observed_at = now;
+        }
         st->generated_at = now; /* fixtures carry a fixed date; make them look fresh */
         st->fetch_failures = 0;
         for (int i = 0; i < st->server_count; ++i) {
@@ -158,6 +197,7 @@ void app_demo_off(void)
     st->have_hub = false;
     st->run_count = st->server_count = st->event_count = st->mi_count = 0;
     st->have_mi = false;
+    memset(&st->flights, 0, sizeof(st->flights));
     app_unlock(true);
     app_notify_token_changed(); /* wake the fetch task */
 }

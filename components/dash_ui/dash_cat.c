@@ -38,12 +38,33 @@ static const anim_t act_anim[DASH_ACT_COUNT] = {
     [DASH_ACT_NAP] = ANIM(false, true, {DASH_LOOK_NAP_SLEEP, 1100}, {DASH_LOOK_SLEEP_2, 1100}),
     [DASH_ACT_CODE] = ANIM(true, true, {DASH_LOOK_CODE, 320}, {DASH_LOOK_CODE_2, 320}),
     [DASH_ACT_DINNER] = ANIM(true, true, {DASH_LOOK_DINNER, 400}, {DASH_LOOK_MILK_2, 400}),
-    [DASH_ACT_FREE] = ANIM(true, true, {DASH_LOOK_YARN, 450}, {DASH_LOOK_TAIL, 450}, {DASH_LOOK_YARN, 450},
-                           {DASH_LOOK_TAIL, 450}, {DASH_LOOK_IDLE, 2400}, {DASH_LOOK_BLINK, 140},
-                           {DASH_LOOK_IDLE, 1800}, {DASH_LOOK_HAPPY, 1400}),
+    [DASH_ACT_FREE] = ANIM(true, true, {DASH_LOOK_IDLE, 16000}, {DASH_LOOK_BLINK, 150},
+                           {DASH_LOOK_IDLE, 4000}, {DASH_LOOK_TAIL, 850}, {DASH_LOOK_IDLE, 4000}),
     [DASH_ACT_WASH] = ANIM(true, true, {DASH_LOOK_WASH, 420}, {DASH_LOOK_WASH_2, 420}, {DASH_LOOK_WASH, 420},
                            {DASH_LOOK_YAWN, 1200}),
     [DASH_ACT_SUNBATHE] = ANIM(false, true, {DASH_LOOK_SUNBATHE, 1300}, {DASH_LOOK_SUN_2, 1300}),
+};
+
+/* Long holds with occasional blinks/tail flicks; brief gestures are scheduled
+ * by dash_idle_at(), rather than looping a toy throughout the evening. */
+static const anim_t idle_anim[DASH_IDLE_COUNT] = {
+    [DASH_IDLE_SIT] = ANIM(true, true, {DASH_LOOK_IDLE, 16000}, {DASH_LOOK_BLINK, 150},
+                           {DASH_LOOK_IDLE, 4000}, {DASH_LOOK_TAIL, 850}, {DASH_LOOK_IDLE, 4000}),
+    [DASH_IDLE_WINDOW] = ANIM(true, true, {DASH_LOOK_WINDOW, 16000}, {DASH_LOOK_WINDOW_BLINK, 150},
+                              {DASH_LOOK_WINDOW, 4500}, {DASH_LOOK_WINDOW_TAIL, 850},
+                              {DASH_LOOK_WINDOW, 3500}),
+    [DASH_IDLE_LIE] = ANIM(true, true, {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
+                           {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
+                           {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
+                           {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
+                           {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
+                           {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_BLINK, 150}),
+    [DASH_IDLE_STRETCH] = ANIM(true, true, {DASH_LOOK_STRETCH, 1200}, {DASH_LOOK_STRETCH_2, 1000}),
+    [DASH_IDLE_GROOM] = ANIM(true, true, {DASH_LOOK_WASH_2, 650}, {DASH_LOOK_WASH, 250},
+                             {DASH_LOOK_WASH_2, 650}, {DASH_LOOK_WASH, 250}, {DASH_LOOK_WASH_2, 900}),
+    [DASH_IDLE_YAWN] = ANIM(true, true, {DASH_LOOK_YAWN, 1400}, {DASH_LOOK_DROWSY, 1200}),
+    [DASH_IDLE_YARN] = ANIM(true, true, {DASH_LOOK_YARN, 550}, {DASH_LOOK_YARN_2, 650},
+                            {DASH_LOOK_YARN, 900}),
 };
 
 static const anim_t pomo_focus_anim = ANIM(true, true, {DASH_LOOK_FOCUS, 300}, {DASH_LOOK_FOCUS_2, 300});
@@ -84,6 +105,8 @@ static struct {
     uint32_t frame_ms; /* time spent in the current frame */
     dash_cat_react_t react;
     uint32_t react_ms;
+    uint32_t idle_phase_tick;
+    bool idle_synced;
     int drawn_look, drawn_mood;
     int forced; /* -1 = auto */
 } cat = {.drawn_look = -1, .forced = -1};
@@ -105,15 +128,37 @@ static void compose(int look, dash_cat_mood_t mood)
     } else if (mood == DASH_CAT_MOOD_CONFUSED) {
         mood_face = DASH_SPR_FACE_CONFUSED, mood_prop = DASH_SPR_PROP_QUESTION;
     }
+    int face_dx = 0, face_dy = 0, prop_dx = 0, prop_dy = 0;
+    /* Mood expressions use the normal seated face as their source. Align
+     * them to each pose's head before replacing its own face layer. */
     for (int i = 0; i < L->n; ++i) {
         int id = L->layer[i];
+        if (id == DASH_SPR_BODY_WASH) face_dy = 2*SCALE;
+        if (id == DASH_SPR_BODY_WINDOW || id == DASH_SPR_BODY_WINDOW_B) face_dx = -2*SCALE;
+        if (id == DASH_SPR_BODY_REST || id == DASH_SPR_BODY_REST_B ||
+            id == DASH_SPR_BODY_STRETCH || id == DASH_SPR_BODY_STRETCH_B) {
+            face_dx = -6*SCALE;
+            face_dy = 9*SCALE;
+        }
+        if (id == DASH_SPR_SIDE_BODY || id == DASH_SPR_SIDE_BODY_B) prop_dx = -3*SCALE;
+    }
+    /* Keep alerts above a low head rather than down inside the torso. */
+    if (face_dx || face_dy) {
+        prop_dx = face_dx;
+        prop_dy = face_dy > 2*SCALE ? 5*SCALE : face_dy;
+    }
+    for (int i = 0; i < L->n; ++i) {
+        int id = L->layer[i];
+        int dx = 0, dy = 0;
         if (mood_face >= 0 && is_face(id)) {
             id = mood_face;
+            dx = face_dx;
+            dy = face_dy;
         }
-        dash_pix_sprite(&cat.pix, dash_sprites[id], DASH_SPR_W, DASH_SPR_H, 0, 0, SCALE);
+        dash_pix_sprite(&cat.pix, dash_sprites[id], DASH_SPR_W, DASH_SPR_H, dx, dy, SCALE);
     }
     if (mood_prop >= 0) {
-        dash_pix_sprite(&cat.pix, dash_sprites[mood_prop], DASH_SPR_W, DASH_SPR_H, 0, 0, SCALE);
+        dash_pix_sprite(&cat.pix, dash_sprites[mood_prop], DASH_SPR_W, DASH_SPR_H, prop_dx, prop_dy, SCALE);
     }
     dash_pix_commit(&cat.pix);
 }
@@ -126,7 +171,28 @@ static const anim_t *routine_anim(void)
     if (cat.ctx.pomo == DASH_POMO_BREAK) {
         return &pomo_break_anim;
     }
+    if (cat.ctx.activity == DASH_ACT_FREE) {
+        int kind = cat.ctx.idle.kind;
+        return &idle_anim[kind >= 0 && kind < DASH_IDLE_COUNT ? kind : DASH_IDLE_SIT];
+    }
     return &act_anim[cat.ctx.activity < DASH_ACT_COUNT ? cat.ctx.activity : DASH_ACT_FREE];
+}
+
+static bool free_time(void)
+{
+    return !cat.react && cat.ctx.activity == DASH_ACT_FREE && cat.ctx.pomo == DASH_POMO_IDLE;
+}
+
+static void select_phase(uint32_t phase_ms)
+{
+    uint32_t duration = 0;
+    for (int i = 0; i < cat.anim->n; ++i) duration += cat.anim->f[i].ms;
+    phase_ms %= duration;
+    cat.frame = 0;
+    while (phase_ms >= cat.anim->f[cat.frame].ms) {
+        phase_ms -= cat.anim->f[cat.frame++].ms;
+    }
+    cat.frame_ms = phase_ms;
 }
 
 static void start_anim(const anim_t *a)
@@ -146,9 +212,11 @@ static void place(int dx, int dy)
 static void tick(lv_timer_t *t)
 {
     if (!cat.anim) {
-        start_anim(routine_anim());
+        start_anim(cat.react ? &react_anim[cat.react] : routine_anim());
+        if (cat.react) select_phase(cat.react_ms);
     }
-    cat.frame_ms += TICK_MS;
+    if (free_time()) select_phase(lv_tick_get()-cat.idle_phase_tick);
+    else cat.frame_ms += TICK_MS;
     if (cat.react) {
         cat.react_ms += TICK_MS;
     }
@@ -162,6 +230,7 @@ static void tick(lv_timer_t *t)
                 cat.react = DASH_CAT_REACT_NONE;
                 cat.anim = NULL;
                 start_anim(routine_anim());
+                if (free_time()) select_phase(lv_tick_get()-cat.idle_phase_tick);
             }
         }
         f = &cat.anim->f[cat.frame];
@@ -189,6 +258,7 @@ lv_obj_t *dash_cat_create(lv_obj_t *parent, int x, int y)
     cat.y = y;
     cat.drawn_look = -1;
     cat.anim = NULL;
+    cat.idle_synced = false;
     cat.shadow = lv_obj_create(parent);
     lv_obj_remove_style_all(cat.shadow);
     lv_obj_set_size(cat.shadow, 84, 12);
@@ -218,6 +288,17 @@ void dash_cat_destroy(void)
 
 void dash_cat_set_ctx(const dash_cat_ctx_t *ctx)
 {
+    /* Anchor to the actual position in the clock-driven state. Recreating the
+     * page, changing language or finishing a reaction must not replay yarn. */
+    uint32_t now = lv_tick_get(), elapsed = (uint32_t)ctx->idle.elapsed_s*1000;
+    uint32_t phase = now-cat.idle_phase_tick;
+    uint32_t drift = phase > elapsed ? phase-elapsed : elapsed-phase;
+    if (!cat.idle_synced || ctx->idle.kind != cat.ctx.idle.kind ||
+        ctx->idle.started_at != cat.ctx.idle.started_at ||
+        (ctx->idle.started_at && drift >= 1500)) {
+        cat.idle_phase_tick = now-elapsed;
+        cat.idle_synced = true;
+    }
     cat.ctx = *ctx;
     if (!cat.react) {
         start_anim(routine_anim());

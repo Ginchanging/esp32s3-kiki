@@ -1,6 +1,6 @@
 # ESP32-S3 桌面状态屏 · Kiki
 
-ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。屏幕首页住着一只原创像素橘猫 **Kiki**：它按作息过日子，你的 CI、服务器和 Muse 提醒一有动静，它就会做出反应。界面支持中英文切换，共 6 页：
+ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。屏幕首页住着一只原创像素橘猫 **Kiki**：它按作息过日子，你的 CI、服务器和 Muse 提醒一有动静，它就会做出反应。界面支持中英文切换，共 8 页：
 
 | 页 | 内容 |
 |---|---|
@@ -9,9 +9,15 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 | 服务器 | 三台服务器各一条近 1 小时的 CPU 心电图，外加内存、磁盘和服务状态 |
 | 番茄钟 | 25 分钟专注 + 5 分钟休息，环形进度条，记录今天完成的番茄数；LED 跟随番茄钟变色 |
 | Kiki 的信箱 | 最近 5 条消息：Muse 提醒、AI 任务推送、米家提醒、Kiki 的日记 |
-| 米家 | 台灯开关（点按钮控制）、洗衣机状态和剩余时间（洗完会提醒）、饮水机水温和滤芯 |
+| 米家 | 台灯开关（点按钮控制）、洗衣机状态和预计几点洗好（洗完会提醒）、饮水机水温和滤芯 |
+| 头顶航班 | 北向朝上的像素雷达，显示 20 公里内的航班；卡片显示航班号/呼号、参考航线、机型、高度和水平距离 |
+| iCloud 日程 | 今天起七天的安排，含全天和跨日日程；点击墙历直达，点日程读完整标题 |
 
-翻页：左右滑动。页面首尾相接：在首页手指从左往右划，会跳到最后一页（米家）；在最后一页往左划，会回到首页。
+第八页是 iCloud 日程：显示今天起七天的安排，点房间墙上的小日历可以直达。
+
+翻页：左右滑动。页面首尾相接：在首页手指从左往右划，会跳到最后一页（日程）；在最后一页往左划，会回到首页。
+
+回首页：在任意页面的空白处快速点两下（点在按钮上不算）。
 
 **Kiki 的作息**（`components/dash_model/dash_schedule.c`，按东八区时间计算，可以改）
 
@@ -19,6 +25,8 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 |---|---|
 | 工作日 | 7:00 晨练（跳绳）· 7:40 早餐 · 8:30 上课 · 11:50 午饭 · 13:00 午睡 · 14:00 写代码 · 17:40 晚饭 · 18:40 自由时间 · 22:50 洗漱 · 23:30 睡觉（夜间模式：画面变暗，LED 不亮） |
 | 周末 | 9:00 起床晨练，14:00 晒太阳 |
+
+自由时间里，Kiki 会坐着发呆、看窗外、趴着休息，每种姿势保持 1–3 分钟，偶尔眨眼、摆尾，穿插几秒钟的伸懒腰、舔爪和哈欠。看窗外采用背对镜头、朝窗户坐着的姿势，头部保持不动，只轻摆尾巴，姿势参考 [Octavi Navarro 的 Cat Cafe #01](https://x.com/OctaviNavarro/status/1093242223255322638)。毛线球每次只玩 8–12 秒，两次至少隔 10 分钟，21:30 后收起来。气泡跟随当前动作；切页、切语言或通知结束后按实际时间接着活动。洗漱改为低头舔爪，爪子连着橘色前臂，脸旁没有白块。
 
 **Kiki 的反应**
 
@@ -31,6 +39,7 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 | 服务器恢复 | 冒出爱心 |
 | Muse 提醒 | 举牌子并弹窗，LED 白闪 |
 | 洗衣机洗完 | 跳起来，弹出“米家提醒”，LED 绿闪，消息进信箱 |
+| 民航客机或货机进入 5 公里 | 首页临时切到随时间变色的露台，Kiki 保持背影静静坐着，只轻轻摆动尾巴；6 秒后恢复房间并弹出可点击航班卡，其他页直接弹卡片 |
 | 点一下 Kiki | 喵一声，并轮流汇报 CI、服务器和下一项作息 |
 | 长按 Kiki | 开始或暂停番茄钟 |
 
@@ -56,7 +65,7 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 2. 运行 `python3 scripts/cat_art.py --sheet shots/cat_sheet.png`，生成设计稿方便查看。
 3. 运行 `python3 scripts/gen_sprites.py`，生成 `components/dash_ui/sprites/dash_sprites.c`（4bpp，约 24 KB）。
 
-屏幕还没到货，所以先用两种方式在 Mac 上看界面：
+屏幕已接入，也可以用两种方式在 Mac 上看界面：
 
 | 命令 | 看到的是什么 |
 |---|---|
@@ -102,6 +111,10 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 ./esp.sh shots               # 生成全部截图到 shots/（含 sheet_*.png 总览）
 ./esp.sh build               # 编译固件（ESP-IDF v6.1，位于 ~/esp/esp-idf-v6.1）
 ./esp.sh flash               # 烧录；campus_nvs 里的 NetID、令牌、UID 都会保留
+./esp.sh ota                 # 编译、发布并等待 Wi-Fi 更新结果，不需要 USB
+./esp.sh ota status          # 通过 Hub 查询固件槽位、版本与更新结果
+./esp.sh ota cancel          # 撤销尚未开始的更新；已经下载则等待结果
+./esp.sh ota rollback        # 重新发布上一份确认可用的固件
 ./esp.sh status              # 校园网状态
 ./esp.sh dash                # 仪表盘状态：令牌、MQTT、上次拉取、内存
 ./esp.sh monitor             # 串口日志，Muse 提醒会自动解码成中文
@@ -114,6 +127,8 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 ./esp.sh cat night on        # 夜间模式；cat time 3 = 作息时间快进 3 小时；cat auto = 恢复自动
 ./esp.sh mi lamp on          # 米家：开/关台灯（on / off / bri 60），和点第 6 页的按钮一样
 ./esp.sh cat diary [week]    # 立刻写一条 Kiki 日记（加 week 是周报）
+./esp.sh cat flight          # 播放飞越演示，弹窗明确标注“飞越演示”
+./esp.sh demo flight         # 航班测试数据；demo off 恢复真实数据
 ./esp.sh knob cw 2           # 模拟旋钮：cw / ccw [格数]、hold cw 4、press、long；rev = 反转方向
 ```
 
@@ -129,6 +144,7 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 | `c` | 下一个作息 |
 | `n` | 夜间模式 |
 | `w` | 米家：洗衣机洗完 |
+| `v` | 飞越演示（命令行截图可用 --flyover --ms 2400） |
 | `y` `Y` | Kiki 的日记 / 周报 |
 | `[` `]` | 旋钮：拧（翻页） |
 | `{` `}` | 旋钮：按住拧（台灯亮度） |
@@ -145,11 +161,17 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 
 | 总览图 | 内容 |
 |---|---|
-| `sheet_pages_zh` / `sheet_pages_en` | 6 个页面（中文 / 英文） |
+| `sheet_pages_zh` / `sheet_pages_en` | 8 个页面（中文 / 英文） |
 | `sheet_routine` | 一天的作息 |
+| `sheet_idle_zh` / `sheet_idle_en` | 自由时间的 7 种动作和对应台词 |
 | `sheet_reactions` | 各种反应 |
 | `sheet_moods` | 各种心情，含夜间、离线、开机 |
 | `sheet_details` | 细节页 |
+| `sheet_flights` | 飞越演出、夜晚、提醒卡及航班空数据/过期/断线状态 |
+| `sheet_calendar` | 日历空日程、缓存和未接入状态 |
+| `sheet_holidays` | 11 种节日布景的白天和夜晚 |
+
+`shots/kiki_idle_pixels.png` 是新姿势的原始像素与 4 倍预览；`kiki_groom.gif` 等展示连续帧，`idle_timeline.csv` 记录一整晚的动作切换。运行 `ctest --test-dir build-sim --output-on-failure` 可验证作息、轮换规则和动画恢复。
 
 **字体**：在 `dash_i18n.c` 里新增中文后，要重新运行 `./scripts/gen_fonts.sh`。16px 字体包含 GB2312 一级的 3755 个常用字，以及界面里出现的所有汉字。
 
@@ -206,11 +228,60 @@ ESP32-S3 N16R8 接入校园网（SYSU-SECURE-2.4G，WPA2-Enterprise PEAP）。�
 
 **说明**
 
+- 洗衣机卡片显示“预计 HH:MM 洗好”，不显示倒计时。这台洗衣机运行中大部分时间不上报剩余时间（2026-11-14 实测：报到 71 分钟后停了 80 多分钟没更新），所以 hub 用“最后一次上报的时刻 + 当时的剩余分钟”算出完成时刻发给板子。超过预计时间还没洗完时显示“马上洗好”，暂停时不显示。
 - 洗衣机从“运行中”变成“完成 / 空闲”，并且剩余时间为 0 时，hub 会发出一个 `mi_done` 事件。板子收到后，Kiki 会跳起来，消息进信箱，LED 绿闪。
 - 改了 `mihome.json` 里的中文设备名之后，要重新运行 `./scripts/gen_fonts.sh` 并重新烧录，小字号字体才会包含这些字。
 - 米家云或 HA 出问题时，第 6 页右上角会显示「连接中断」，不影响其他页面。
 
+## iCloud 日历与节日布景
+
+房间墙历显示当天日期，有日程时带一个小标记。点墙历进入第八页，在七天日期条上选择日期；列表显示全天事件、时间、标题和来源日历。点一条日程可读完整标题，再轻点返回。每天超过八条时用底部按钮翻组，列表可上下滚动。首版只读，不修改苹果日历，也不额外弹出日程提醒。
+
+接入复用 hub 上的 Home Assistant：
+
+1. 建立隧道：`ssh -N -L 8123:127.0.0.1:8123 esp-hub`，浏览器打开 `http://127.0.0.1:8123`。
+2. 在 [Apple 账户](https://account.apple.com/)的「登录和安全性 → App 专用密码」生成一个密码，名称例如 `Kiki 日历`；需要开启双重认证。
+3. HA「设置 → 设备与服务 → 添加集成 → CalDAV」，地址填 `https://caldav.icloud.com/`，用户名填 Apple 账户邮箱，密码填刚生成的 App 专用密码，保留 SSL 验证。通过界面添加才能包括全天事件。
+4. 将该连接重命名为 **Kiki iCloud**。`server/calendar.json` 的 `entry_title` 按这个名称识别连接，汇总其全部可读取日历，不混入其他 HA 日历账户。新增 iCloud 日历后，重新加载该 CalDAV 集成，让 HA 发现新日历。
+5. `cd server && ./deploy.sh hub`。hub 复用现有 HA 令牌；Apple 密码只保存在 HA 配置中，不进入仓库、聊天或固件。
+
+hub 每 15 分钟更新今天起七天的窗口；设备进入日程页、切日期或翻组立即取缓存，平时每分钟检查一次。同步失败保留上次成功数据并标记；缓存只在内存中，重启后重新取数。`/api/device/calendar?day=YYYY-MM-DD&offset=0` 使用现有设备令牌，每次最多八条、回复不超过 8 KiB。`./esp.sh dash` 的 calendar 行提供同步状态、条数和数据年龄，不输出日程正文。
+
+节日布景由设备按北京时间独立判断，无需在 iCloud 建节日日程，也能在断网时工作：
+
+| 日期 | 布景 |
+|---|---|
+| 农历正月初一至初七 | 春节灯笼、春联和红包 |
+| 农历正月十五 | 元宵兔子花灯、汤圆 |
+| 农历五月初五 | 端午粽子、艾草 |
+| 农历七月初七 | 七夕双星、鹊桥 |
+| 农历九月初九 | 重阳菊花、远山 |
+| 冬至当天 | 窗外飘雪 |
+| 公历 10 月 1–7 日 | 国庆小旗、夜间烟花 |
+| 公历 10 月 31 日 | 万圣节南瓜灯、蝙蝠 |
+| 11 月第四个星期四 | 美国感恩节枫叶、丰收篮 |
+| 公历 12 月 25 日 | 圣诞树、礼物 |
+| 公历 8 月 7 日 | 生日蜡烛蛋糕 |
+
+其余日子自动恢复普通房间，闰月不重复过节；重合节日按装饰层叠加，中央摆件优先生日。夜间沿用整体变暗，重要通知和飞越场景照常工作。
+
+农历和冬至使用 [香港天文台公历农历对照表](https://www.hko.gov.hk/en/gts/time/conversion.htm)的离线数据，覆盖 2026–2099 年；公历节日和生日不受这个年份范围限制。数据来源和原表 SHA-256 保存在 `assets/calendar/holidays_2026_2099.json`，运行 `python3 scripts/gen_holidays.py` 可离线重建 C 表，只有 `--refresh-hko` 才会重新下载。没有直接使用 LVGL 的节气表，因为其部分年份的冬至日期不一致。
+
+日历 fixture 为 `16_calendar.json` 至 `19_calendar_disabled.json`；运行 `./esp.sh shots` 查看中英页面和全部昼夜节日布景。验证命令：`python3 -m unittest discover -s server -p 'test_*.py'` 与 `ctest --test-dir build-sim --output-on-failure`。
+
 ## 服务器
+
+**头顶航班**
+
+- 位置数据来自 [adsb.fi](https://adsb.fi/) 的[公开 API](https://github.com/adsbfi/opendata)，用于个人非商业桌面屏；hub 每 10 秒查询一次，覆盖情况取决于接收站。机型、位置和航线字段可能缺失，空雷达不代表实际空域一定没有飞机。
+- 参考航线由 [adsbdb](https://www.adsbdb.com/) 补全；它不是实时飞行计划。补全失败显示“航线待补全”，航向和位置继续更新。字母数字混合的 ATC 呼号保留为呼号，不冒充公众航班号。
+- 在 `server/secrets/flights.json` 设置固定位置，格式见 `server/flights.example.json`。`coord_type` 必须明确为 `wgs84`、`gcj02` 或 `bd09`；百度拾取坐标用 `bd09`，hub 近似换算到 WGS84。文件不入库，部署时作为 systemd credential 传入。
+- 雷达半径默认 20 公里，提醒半径默认 5 公里，均按地面水平距离。仅新鲜的、未落地且可识别的民航运输目标提醒；已标记军机、直升机及地面目标排除。身份不确定的目标仅显示在雷达上。
+- 同一架飞机一次经过只提醒一次。再次提醒需要离开 7 公里至少 2 分钟，且距上次提醒超过 30 分钟。断网不算离开；hub 和板子重启后建立基线，不重播旧提醒。飞越不闪灯，夜间沿用变暗规则，番茄钟持续计时，重要通知优先。
+- `/api/device/flights` 使用原有设备令牌，回复不超过 8 KiB；它的失败和过期状态独立于原仪表盘。板子每 10 秒拉取，原状态仍每 30 秒拉取。日常 `./esp.sh dash` 可查看航班状态与数据年龄。
+- 后端校验：`python3 -m unittest discover -s server -p 'test_*.py'`；共享 C 模型校验：`ctest --test-dir build-sim --output-on-failure`。`fixtures/9_flight.json` 至 `15_flights_disabled.json` 覆盖正常、多机、无航班、未知字段、过期、断线和未配置。
+
+坐标换算公式改编自 MIT 许可的 [wandergis/coordtransform](https://github.com/wandergis/coordtransform)，许可见 `server/flight_coord_LICENSE.txt`。
 
 ```sh
 cd server && ./deploy.sh all     # 也可以单独部署：hub / gcp / codex
@@ -229,11 +300,11 @@ cd server && ./deploy.sh all     # 也可以单独部署：hub / gcp / codex
 - 板子用的设备令牌在 `server/secrets/device_token`，用 `./esp.sh token` 写入板子。
 - hub 证书是自签的（CN=esp-dash.local，有效期到 2036 年），已经固定在固件 `main/certs/hub.pem` 和各台 agent 上。
 
-## 屏幕到货后（第二轮）
+## 屏幕与外设接线
 
 | 模块 | 引脚 → ESP32-S3 |
 |---|---|
-| 2.8" ILI9341V 屏 | VCC→5V、GND→GND、SCK→12、MOSI→11、MISO→13、CS→10、DC→9、RST→8、BL→7 |
+| 2.8" ILI9341V 屏 | VCC→**3V3**、GND→GND、SCK→12、MOSI(SDI)→11、CS→10、DC(RS)→9、RST→8、BL(LED)→7；MISO(SDO) 不用接 |
 | FT6336G 触摸 | SDA→15、SCL→16、INT→17、RST→18 |
 | SHT30 | 与触摸共用 SDA 15 / SCL 16，地址 0x44 |
 | KY-016 RGB | R→4、G→5、B→6、GND→GND |
@@ -256,7 +327,26 @@ cd server && ./deploy.sh all     # 也可以单独部署：hub / gcp / codex
 
 - 接线以模块上的丝印为准。
 - GPIO35–37 被 Octal PSRAM 占用，19/20 是 USB，这些脚都不要用。
-- 软件上只需把 `main/app_ui.c` 里的 headless 显示换成 esp_lcd 的 ILI9341 驱动和 FT5x06 触摸驱动。
+
+**屏幕供电**
+- 这块开发板的 `5Vin` 脚默认**只进不出**，接在上面屏幕不亮。所以屏幕 VCC 接 3V3。
+- 想改用 5V：用焊锡短接板子上的 `IN-OUT` 焊盘（RGB 灯旁边），5Vin 才会对外输出 5V。短接后，插着 USB 时不要再从 5Vin 接别的电源。
+
+**屏幕调整**（`./esp.sh lcd`，改完立即生效，存在板子里）
+
+| 现象 | 命令 |
+|---|---|
+| 看状态（是否识别到屏幕/触摸、上次触摸坐标） | `./esp.sh lcd` |
+| 颜色像底片（黑白颠倒） | `./esp.sh lcd inv` |
+| 红蓝互换（Kiki 变蓝） | `./esp.sh lcd rgb` |
+| 画面左右镜像 / 上下颠倒 | `./esp.sh lcd mx` / `./esp.sh lcd my` |
+| 点的位置左右反 / 上下反 / 横竖反 | `./esp.sh lcd tmx` / `tmy` / `txy` |
+| 背光亮度 | `./esp.sh lcd bl 60`（0–100，BL 要接在 GPIO7 上才有效） |
+| 花屏、条纹（线太长） | `./esp.sh lcd mhz 20`（默认 40） |
+| 全部恢复默认 | `./esp.sh lcd reset` |
+| 背光一跳一跳（3V3 供电时） | Wi-Fi 省电默认已关；`./esp.sh wifips on` 可重新打开做对比 |
+
+同一个命令再执行一次就是关掉。`./esp.sh mirror` 照常可用，屏幕和 Mac 窗口同时显示，两边都能点。
 
 ## 校园网（原有功能，保持不变）
 
@@ -285,6 +375,10 @@ cd server && ./deploy.sh all     # 也可以单独部署：hub / gcp / codex
 
 **串口注意**：macOS 打开串口时，如果先拉低 DTR、而 RTS 仍是高电平，ESP32-S3 会复位。`campus.py` 打开串口时保持 DTR 为高，只拉低 RTS，这样执行命令不会让板子重启。
 
-**回滚**：把 `ESPdevNet.zip` 里的 `build/sysu_wifi.bin` 写到 0x10000，凭据会保留。不要用 `.flash-backup/` 整片写回，那会覆盖 `campus_nvs`，并把板子恢复成出厂固件。
+**固件更新与恢复**：16 MiB Flash 使用 `dual6-v1` 布局，两块各 6 MiB 的应用槽；配置分区的位置和大小不变。首次运行 `./esp.sh flash` 会先校验并保存当前完整 Flash 快照，再迁移到新布局。以后优先使用 `./esp.sh ota`：电脑通过已有 SSH 别名 `esp-hub` 发布，板子每 30 秒主动检查，沿用 Hub 固定证书和设备令牌下载。屏幕显示进度和 Kiki 的反应，校验成功后显示 3、2、1 再重启。新版通过存储、UI 心跳和 Hub 获取检查后确认；120 秒内未通过则回退，失败任务不会反复自动安装。相同版本不会重复重启。
+
+USB 仍使用 `./esp.sh flash`，它会选择非活动槽并保留配置；无法确定启动槽时可用 `./esp.sh flash --recover` 恢复到 `ota_0`，保留配置和另一槽。迁移前的老固件不能直接写到 0x10000 当作回滚；它不支持新布局和 OTA 确认机制。不要用 `.flash-backup/` 整片写回做日常恢复，否则会覆盖保存的配置。
+
+`./esp.sh ota` 默认等待 10 分钟；超时仅表示结果待确认，继续用 `ota status` 查询。OTA 只更新应用，启动程序或分区表变更仍需 USB。中英文更新画面可用 `python3 scripts/ota_shots.py` 生成；模拟器支持 `--ota downloading|verifying|countdown:3|validating|success|failed|rollback`。
 
 [中大接入指南](https://inc.sysu.edu.cn/cat/156) · [乐鑫证书包文档](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s3/api-reference/protocols/esp_crt_bundle.html) · [巴法云 MQTT 文档](https://cloud.bemfa.com/docs/src/mqtt.html)

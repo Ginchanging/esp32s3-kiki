@@ -11,6 +11,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "dash_flights.h"
+#include "dash_calendar.h"
+#include "dash_idle.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -140,7 +143,7 @@ typedef struct {
     bool on;          /* lamp / switch */
     int8_t bri;       /* lamp brightness 1..100, -1 unknown */
     int8_t pct;       /* washer progress 0..100, -1 unknown */
-    int16_t left_min; /* washer minutes left, -1 unknown */
+    int64_t eta;      /* washer: expected finish (UTC epoch s), 0 unknown */
     /* water dispenser (DASH_NONE16 / -1 = unknown) */
     int16_t temp_c, tds;
     int8_t filter_pct[2];
@@ -169,6 +172,8 @@ typedef enum {
     DASH_NET_DOWN,
 } dash_net_t;
 
+#include "dash_ota.h"
+
 /* Everything the UI needs, in one plain struct. */
 typedef struct {
     /* --- from the hub (/api/device/status) --- */
@@ -196,6 +201,11 @@ typedef struct {
     /* per-day counts for the diary */
     int day_count;
     dash_day_t days[DASH_DAYS];
+
+    /* Independent flight endpoint: its failures never change dashboard freshness. */
+    dash_flights_t flights;
+    dash_calendar_t calendar;
+    dash_ota_status_t ota; /* device-owned; independent of hub dashboard freshness */
 
     /* --- fetch bookkeeping (device side) --- */
     int fetch_failures;
