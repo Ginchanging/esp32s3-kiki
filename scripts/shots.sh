@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Render simulator screenshots into shots/ plus contact sheets (shots/sheet_*.png):
-#   sheet_pages_zh / _en   the 8 pages
+#   sheet_pages_zh / _en   the 9 pages
 #   sheet_routine          Kiki through the day (every activity)
 #   sheet_reactions        CI pass / fail / start, server down / up, Muse, touch, morning
 #   sheet_moods            worried / nervous / confused, night, offline, boot
@@ -22,10 +22,11 @@ shot() { # name, args...
 }
 
 for lang in zh en; do
-  for page in 0 1 2 3 4 5 6 7; do
+  for page in 0 1 2 3 4 5 6 7 8; do
     fixture="$FX/1_ok.json"
     if [ "$page" = 6 ]; then fixture="$FX/10_flights_multi.json"; fi
     if [ "$page" = 7 ]; then fixture="$FX/16_calendar.json"; fi
+    if [ "$page" = 8 ]; then fixture="$FX/20_health.json"; fi
     shot "page_${lang}_$page" --fixture "$fixture" --page "$page" --lang "$lang"
   done
 done
@@ -63,6 +64,13 @@ shot "flight_error" --fixture "$FX/14_flights_error.json" --page 6
 shot "calendar_empty" --fixture "$FX/17_calendar_empty.json" --page 7
 shot "calendar_cached" --fixture "$FX/18_calendar_cached.json" --page 7
 shot "calendar_disabled" --fixture "$FX/19_calendar_disabled.json" --page 7 --lang en
+shot "health_sleep" --fixture "$FX/20_health.json" --page 8 --swipe "tap:120,69,1"
+shot "health_body" --fixture "$FX/20_health.json" --page 8 --swipe "tap:195,69,1"
+shot "health_sleep_en" --fixture "$FX/20_health.json" --page 8 --lang en --swipe "tap:120,69,1"
+shot "health_body_en" --fixture "$FX/20_health.json" --page 8 --lang en --swipe "tap:195,69,1"
+shot "health_cached" --fixture "$FX/21_health_cached.json" --page 8
+shot "health_empty" --fixture "$FX/22_health_empty.json" --page 8
+shot "health_disabled" --fixture "$FX/1_ok.json" --page 8 --lang en
 python3 "$ROOT/scripts/holiday_shots.py" "$SIM" "$OUT"
 python3 "$ROOT/scripts/idle_shots.py" "$SIM" "$OUT"
 

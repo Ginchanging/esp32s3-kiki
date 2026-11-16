@@ -20,6 +20,7 @@ LoadCredential=ha_token:/etc/esp-dash/ha_token
 LoadCredential=mihome.json:/etc/esp-dash/mihome.json
 LoadCredential=flights.json:/etc/esp-dash/flights.json
 LoadCredential=calendar.json:/etc/esp-dash/calendar.json
+LoadCredential=health.json:/etc/esp-dash/health.json
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=yes

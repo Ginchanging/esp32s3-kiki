@@ -8,6 +8,7 @@ idf_component_register(
                    "../fixtures/1_ok.json" "../fixtures/2_gh_failed.json"
                    "../fixtures/3_gh_running.json" "../fixtures/4_server_down.json"
                    "../fixtures/9_flight.json"
+                   "../fixtures/20_health.json"
 )
 if(DASH_OTA_TEST_FAIL_BOOT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DASH_OTA_TEST_FAIL_BOOT=1)

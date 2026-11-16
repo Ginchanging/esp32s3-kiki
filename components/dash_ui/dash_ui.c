@@ -8,6 +8,7 @@
 #include "dash_cat.h"
 #include "dash_flight_ui.h"
 #include "dash_calendar_ui.h"
+#include "dash_health_ui.h"
 #include "dash_season.h"
 #include "dash_ota_ui.h"
 #include "dash_i18n.h"
@@ -1041,6 +1042,7 @@ static void build_mihome(lv_obj_t *t)
 
 static void destroy_pix(void)
 {
+    dash_health_ui_destroy();
     dash_calendar_ui_destroy();
     dash_season_destroy();
     dash_flight_ui_destroy();
@@ -1085,6 +1087,7 @@ static void build(void)
     build_mihome(ui.tiles[5]);
     dash_flight_ui_create(ui.tiles[6], ui.tiles[0]);
     dash_calendar_ui_create(ui.tiles[7]);
+    dash_health_ui_create(ui.tiles[8]);
     lv_obj_move_to_index(ui.night_veil, -1); /* the outdoor scene follows the same night dimming */
 
     lv_obj_t *dots = lv_obj_create(scr);
@@ -1116,7 +1119,7 @@ static void rebuild(void)
         ui.popup = NULL;
     }
     destroy_pix();
-    /* Do not keep two complete eight-page trees resident during a language
+    /* Do not keep two complete page trees resident during a language
      * switch. A tiny temporary screen lets us delete the old active screen
      * safely. Both screen loads happen before the next refresh, so the panel
      * keeps its previous frame until the rebuilt screen is ready. */
@@ -1959,6 +1962,7 @@ void dash_ui_update(const dash_state_t *st, int64_t now)
     update_mail(st, now);
     update_mihome(st);
     dash_calendar_ui_update(&ui.last.calendar, now, st->clock_valid);
+    dash_health_ui_update(&ui.last.health, now, st->clock_valid);
     int64_t sky_now = routine_now();
     if (ui.debug_night == 1) sky_now += (23 - ((sky_now + DASH_TZ_OFFSET_S)/3600)%24)*3600;
     dash_ota_ui_update(&st->ota);

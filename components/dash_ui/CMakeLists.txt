@@ -3,6 +3,7 @@ set(DASH_UI_SRCS
     dash_ui.c
     dash_flight_ui.c
     dash_calendar_ui.c
+    dash_health_ui.c
     dash_season.c
     dash_ota_ui.c
     dash_i18n.c

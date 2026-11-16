@@ -24,9 +24,9 @@ with tempfile.TemporaryDirectory(prefix="kiki-calendar-ui-") as temp:
     assert f"day={today+1} offset=0 total=2" in out, out
     assert f"day={today+6} offset=0 total=0" in out, out
     out = run("--page", "7", "--swipe", "200,225,40,225")
-    assert "page 7 -> 0" in out, out
+    assert "page 7 -> 8" in out, out
     out = run("--swipe", "40,225,200,225")
-    assert "page 0 -> 7" in out, out
+    assert "page 0 -> 8" in out, out
     out = run("--page", "7", "--swipe", "tap:120,40,2")
     assert "page 7 -> 0" in out, out
     out = run("--night", "--swipe", "tap:89,147,1;tap:89,147,1")

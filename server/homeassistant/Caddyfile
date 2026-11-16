@@ -1,0 +1,4 @@
+# Import from /etc/caddy/Caddyfile. The ESP32's pinned :8443 endpoint is separate.
+ha.kiki-home.top {
+    reverse_proxy 127.0.0.1:8123
+}

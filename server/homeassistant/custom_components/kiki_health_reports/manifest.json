@@ -1,0 +1,9 @@
+{
+  "domain": "kiki_health_reports",
+  "name": "Kiki Health report timestamps",
+  "version": "1.0.0",
+  "codeowners": [],
+  "dependencies": ["mobile_app"],
+  "integration_type": "service",
+  "iot_class": "local_push"
+}

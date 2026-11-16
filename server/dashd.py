@@ -38,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # trusted sibling module, also under python -I
 from ota import OTAStore, HEX64
+from health import HealthHub
 
 HUB_CN = "esp-dash.local"  # name in the pinned self-signed certificate
 CPU_HIST = 60               # one sample per minute, last hour
@@ -54,6 +55,11 @@ def log(*parts):
 
 def cn_date(ts=None):
     return datetime.datetime.fromtimestamp(time.time() if ts is None else ts, CN_TZ).date()
+
+
+def wire_text(value, limit):
+    """The shared C fields are UTF-8 byte budgets, not Python character counts."""
+    return str(value or "").encode("utf-8", "replace")[:limit].decode("utf-8", "ignore")
 
 
 def state_path(name):
@@ -233,6 +239,8 @@ class Hub:
         self.mihome = None  # MiHome when Home Assistant is configured
         self.flights = None  # FlightRadar; independent from dashboard freshness/events
         self.calendar = None  # iCloud via HA; independent from dashboard freshness
+        self.health = HealthHub(None, {})
+        self.device_diagnostics = {}
         self.ota = OTAStore()
 
     def add_event(self, kind, subject):
@@ -339,28 +347,60 @@ class Hub:
             if s["reported_at"] > 0:
                 self.online[name] = online
 
+    def record_device_diagnostics(self, headers):
+        try:
+            free = int(headers.get("X-Dash-Heap-Free", ""))
+            minimum = int(headers.get("X-Dash-Heap-Min", ""))
+            uptime = int(headers.get("X-Dash-Uptime", ""))
+        except (ValueError, TypeError):
+            return
+        if 0 <= minimum <= free <= 512*1024 and 0 <= uptime <= 2147483647:
+            with self.lock:
+                self.device_diagnostics = {"received_at": int(time.time()), "heap_free": free,
+                                           "heap_min": minimum, "uptime_s": uptime}
+
     def snapshot(self):
         with self.lock:
             self.update_online()
             servers = []
             for name in self.order[:3]:
                 s = dict(self.servers[name])
+                s["name"] = wire_text(s.get("name"), 19)
+                s["services"] = [{**v, "name": wire_text(v.get("name"), 19)}
+                                 for v in s.get("services", [])[:4]]
                 s["online"] = self.online.get(name, False)
                 s["cpu_hist"] = [c for _, c in self.cpu_hist.get(name, [])]
                 servers.append(s)
             github = dict(self.github)
+            github["repo"] = wire_text(github.get("repo"), 47)
+            github["runs"] = [{**r, "workflow": wire_text(r.get("workflow"), 47),
+                               "branch": wire_text(r.get("branch"), 39)}
+                              for r in github.get("runs", [])[:4]]
             if self.contrib:
-                github["contrib"] = self.contrib
+                github["contrib"] = {**self.contrib, "user": wire_text(self.contrib.get("user"), 23)}
             snap = {
                 "schema": 1,
                 "generated_at": int(time.time()),
                 "github": github,
                 "servers": servers,
-                "events": list(self.events),
+                "events": [{**e, "subject": wire_text(e.get("subject"), 79)} for e in self.events[-8:]],
                 "days": self.ledger.snapshot(self.commits),
             }
         if self.mihome:
             snap["mihome"] = self.mihome.snapshot()
+        snap["health"] = self.health.snapshot()
+        # Keep the device's fixed buffer even at maximum names/history/event counts.
+        # Current values and the newest event/run take priority over old history.
+        while len(json.dumps(snap, ensure_ascii=False, separators=(",", ":")).encode()) > 8192:
+            history = max((s["cpu_hist"] for s in servers), key=len, default=[])
+            if len(history) > 15:
+                del history[:len(history)//2]
+            elif len(snap["events"]) > 1:
+                del snap["events"][0]
+            elif len(github["runs"]) > 1:
+                github["runs"].pop()
+            else:
+                raise ValueError("status wire budget exceeded")
         return snap
 
 
@@ -670,8 +710,8 @@ class MiHome:
 
     @staticmethod
     def base(d):
-        return {"id": d["id"], "kind": d["kind"], "name_zh": d.get("name_zh", d["id"])[:23],
-                "name_en": d.get("name_en", d["id"])[:23], "online": False}
+        return {"id": d["id"], "kind": d["kind"], "name_zh": wire_text(d.get("name_zh", d["id"]), 23),
+                "name_en": wire_text(d.get("name_en", d["id"]), 23), "online": False}
 
     def read(self, d):
         v = self.base(d)
@@ -1214,10 +1254,12 @@ def make_handler(hub, device_token, agent_tokens):
             if path.path.startswith("/api/device/ota/images/"):
                 return self.ota_image(path.path)
             is_calendar = path.path == "/api/device/calendar"
-            if not is_calendar and self.path not in ("/api/device/status", "/api/device/flights"):
+            if not is_calendar and self.path not in ("/api/device/status", "/api/device/flights", "/api/device/diagnostics"):
                 return self.send_json(404, {"error": "not found"})
             if not hmac.compare_digest(self.bearer().encode(), device_token.encode()):
                 return self.send_json(401, {"error": "unauthorized"})
+            if self.path == "/api/device/diagnostics":
+                return self.send_json(200, dict(getattr(hub, "device_diagnostics", {})))
             if is_calendar:
                 try:
                     # Python 3.10 rejects an empty query under these flags;
@@ -1234,6 +1276,8 @@ def make_handler(hub, device_token, agent_tokens):
             if self.path == "/api/device/flights":
                 return self.send_json(200, hub.flights.snapshot() if hub.flights else
                                       {"schema": 1, "configured": False})
+            if hasattr(hub, "record_device_diagnostics"):
+                hub.record_device_diagnostics(self.headers)
             self.send_json(200, hub.snapshot())
 
         def read_body(self):
@@ -1370,6 +1414,16 @@ def run_hub(args):
     threading.Thread(target=self_loop, daemon=True).start()
 
     ha_token = read_cred(creds, "ha_token", required=False)
+    health_conf = read_cred(creds, "health.json", required=False)
+    if ha_token and health_conf:
+        try:
+            hub.health = HealthHub(HomeAssistant(ha_token, port=int(os.environ.get("HA_PORT", "8123"))),
+                                   json.loads(health_conf), path=state_path("health.json"))
+            if hub.health.configured:
+                threading.Thread(target=hub.health.loop, daemon=True).start()
+                log("health: enabled", len(hub.health.entities), "metrics")
+        except (ValueError, TypeError, AttributeError):
+            log("health: bad configuration")
     calendar_conf = read_cred(creds, "calendar.json", required=False)
     if ha_token and calendar_conf:
         try:

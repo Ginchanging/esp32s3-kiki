@@ -207,6 +207,7 @@ void dash_state_init(dash_state_t *st)
 {
     memset(st, 0, sizeof(*st));
     st->net = DASH_NET_BOOTING;
+    dash_health_init(&st->health);
     for (int i = 0; i < DASH_WEIGHT_DAYS; ++i) {
         st->weight_hist[i] = DASH_NONE16;
     }
@@ -337,6 +338,9 @@ bool dash_model_parse(dash_state_t *st, const char *json, size_t len)
 
     parse_mihome(&next, cJSON_GetObjectItemCaseSensitive(root, "mihome"));
     parse_days(&next, cJSON_GetObjectItemCaseSensitive(root, "days"));
+    const cJSON *health = cJSON_GetObjectItemCaseSensitive(root, "health");
+    if (!health) dash_health_init(&next.health); /* old hub, or a fixture without health */
+    else if (!dash_health_read(&next.health, health)) next.health.error = true;
 
     cJSON_Delete(root);
     next.have_hub = true;

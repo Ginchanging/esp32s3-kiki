@@ -17,7 +17,7 @@ extern "C" {
 
 #define DASH_UI_W 240
 #define DASH_UI_H 320
-#define DASH_UI_PAGES 8 /* 0 room, 1 GitHub, 2 servers, 3 pomodoro, 4 mailbox, 5 Mi Home, 6 flights, 7 calendar */
+#define DASH_UI_PAGES 9 /* 0 room, 1 GitHub, 2 servers, 3 pomodoro, 4 mailbox, 5 Mi Home, 6 flights, 7 calendar, 8 health */
 
 typedef void (*dash_ui_lang_cb_t)(dash_lang_t lang);
 typedef void (*dash_ui_pomo_cb_t)(int count, int minutes, int yday);

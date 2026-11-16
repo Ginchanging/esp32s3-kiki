@@ -342,6 +342,10 @@ bool app_cmd_handle(char *line)
                (long)st->calendar.day, (unsigned)st->calendar.count, (unsigned)st->calendar.total,
                (unsigned)st->calendar.offset, st->calendar.fetch_failures,
                st->calendar.fetched_at ? (long long)(now-st->calendar.fetched_at) : -1LL);
+        printf(P "health configured=%d ok=%d error=%d age=%lld model_bytes=%u\n",
+               st->health.configured, st->health.ok, st->health.error,
+               st->health.fetched_at ? (long long)(now-st->health.fetched_at) : -1LL,
+               (unsigned)sizeof(st->health));
         app_unlock(false);
         return true;
     }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Firmware for an ESP32-S3 N16R8 desk dashboard on the SYSU campus Wi-Fi (WPA2-Enterprise PEAP), starring **Kiki**, an original pixel cat. It has eight LVGL pages: Kiki's room, GitHub Actions, servers, pomodoro, mailbox, Mi Home (米家), overhead flights, and iCloud agenda. The UI is bilingual (zh/en).
+Firmware for an ESP32-S3 N16R8 desk dashboard on the SYSU campus Wi-Fi (WPA2-Enterprise PEAP), starring **Kiki**, an original pixel cat. It has nine LVGL pages: Kiki's room, GitHub Actions, servers, pomodoro, mailbox, Mi Home (米家), overhead flights, iCloud agenda, and Apple Health. The UI is bilingual (zh/en).
 
 The 2.8" ILI9341V + FT6336G screen is wired and driven by `main/app_lcd.c`:
 - `./esp.sh mirror` still streams the same frames to a Mac window; clicks there become touches alongside the real touch panel.
@@ -91,6 +91,7 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
 
 **Mi Home (米家).**
 - Mi Home has no personal API. The only official route is Xiaomi's Home Assistant integration, so the hub runs HA in Docker on `127.0.0.1:8123` only (`server/homeassistant/`, deployed with `./deploy.sh ha`, image and integration versions pinned).
+- First-install HA bootstrap uses bridge networking with only a loopback port publication. Host networking is enabled only after the admin API confirms a stable loopback HTTP configuration; failed setup retains the isolated bootstrap.
 - `dashd.py` (`MiHome` class) polls the entities listed in `server/mihome.json` through HA's REST API, using the long-lived token in `/etc/esp-dash/ha_token` (written by `server/set_ha_token.sh`). It stays stdlib-only.
 - The hub JSON gains a `mihome` section. The washer card shows an expected finish time (`eta`, epoch s), not a countdown: the washer reports its time left only now and then, so the hub dates the last report (HA `last_changed`) and adds the minutes. A washer going from running to done becomes a hub event `mi_done` (subject = device id). The UI task turns that event into a mailbox message via `dash_ui_mi_event_msg()`.
 - Lamp taps flow `dash_ui_set_mi_cb` → `app_request_mi` → fetch task POST. The reply's `mihome` object is parsed with `dash_model_parse_mihome()`.
@@ -125,6 +126,8 @@ the clouds, distant roofs and parapet; night dimming still follows the existing 
 
 **Calendar and holidays.**
 Calendar is independent: `CalendarHub` in `server/dashd.py` reads the HA CalDAV entry named by `server/calendar.json` (default `Kiki iCloud`), all its calendar entities, every 15 minutes. `/api/device/calendar` is token-protected and paginated at 8 events/8 KiB; `dash_calendar_t` and its failures never alter dashboard freshness. UI requests go through a latest-query sequence in `app_state.c`, consumed by fetch (never LVGL on fetch). Titles are not logged. HA UI setup includes all-day events; credentials stay in HA. `dash_calendar_ui.c` owns page 7 and the wall-calendar entry. `dash_season.c` draws code-native decorations and pauses animation behind the flyover scene. Holidays use offline HKO dates for 2026–2099 (`scripts/gen_holidays.py`), not LVGL's inaccurate solar-term table. Birthday is Gregorian August 7. Never edit the generated date include manually.
+
+**Apple Health.** `server/health.py` reads only the iPhone entities explicitly mapped in `/etc/esp-dash/health.json`, in one local HA template call per minute. The small `kiki_health_reports` HA component tracks only actual `mobile_app` update timestamps for those entities, never values; its markers are not restored after HA restarts. Accept a state only when its timestamp matches that report evidence. `ha_setup.py bind` discovers official health unique IDs within one device, excludes their HA Recorder history, and never prints values. HA HTTP settings are managed through the versioned admin API (2026.8+), not the old YAML `http:` block; `ha.kiki-home.top` uses Caddy and HA's native login. `health` is an optional, at-most-2-KiB part of the existing 8-KiB status reply. Its parsing/failures are independent of dashboard freshness and OTA verification. Absolute weights stay in mode-0600 hub state; only relative 0.1-kg values reach the board. Records are observations from onboarding, not HealthKit measurement dates; never invent dates or carry yesterday's totals into today. Private cache v2 discards unverified v1 observations; the wire schema remains 1. `dash_health_ui.c` owns page 8 (activity/sleep/body) with four objects and code-native drawing to spare internal heap. `main/app_ui.c` keeps its non-DMA state snapshot in PSRAM. `DEMO health` is synthetic and never updates server history. `health_watch.py` records resource counters only; device heap/uptime piggyback on existing status requests and the diagnostics endpoint requires the device token.
 
 **Fonts.**
 

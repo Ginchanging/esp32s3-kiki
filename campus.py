@@ -183,6 +183,9 @@ def show_message(line):
         age = fields.get("age", "-1")
         updated = "尚未收到数据" if age == "-1" else f"数据 {age} 秒前更新"
         print(f"  日历 {status} · 所选日期 {fields.get('total', '0')} 条 · {updated} · 连续失败 {fields.get('failures', '0')} 次", flush=True)
+    elif label == "health":
+        status = "尚未接入" if fields.get("configured") != "1" else "缓存或连接中断" if fields.get("ok") != "1" or fields.get("error") == "1" else "已连接"
+        print(f"  健康 {status} · 读取年龄 {fields.get('age', '-1')} 秒 · 数据模型 {fields.get('model_bytes', '?')} 字节", flush=True)
     elif label in ("token", "bemfa") and "saved" in fields:
         name = "Hub 设备令牌" if label == "token" else "巴法云 UID"
         print(f"{name}{'已写入板载闪存' if fields['saved'] == '1' else '写入失败 ' + fields.get('err', '')}。", flush=True)
@@ -381,7 +384,7 @@ def main():
                                            "dash", "token", "bemfa", "lang", "demo", "muse",
                                            "led", "monitor", "cat", "agent", "mi", "knob", "lcd", "wifips"))
     parser.add_argument("value", nargs="?",
-                        help="lang: zh/en；demo: ok/gh_failed/gh_running/server_down/flight/off；"
+                        help="lang: zh/en；demo: ok/gh_failed/gh_running/server_down/flight/health/off；"
                              "muse: 提醒文字；led: GPIO 号或 off；token/bemfa: clear")
     parser.add_argument("--port", help="指定串口，例如 COM5 或 /dev/cu.usbmodem1101")
     parser.add_argument("--bootloader", action="store_true", help="已手动进入下载模式")

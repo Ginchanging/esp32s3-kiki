@@ -9,6 +9,7 @@
 #include "app.h"
 #include "campus_net.h"
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -49,6 +50,17 @@ int app_hub_json(const char *url, const char *token, const char *post, char *out
     esp_http_client_set_header(c, "Authorization", auth);
     wipe(auth, sizeof(auth));
     esp_http_client_set_header(c, "Accept", "application/json");
+    /* Piggyback non-sensitive capacity counters on the existing status poll.
+     * This lets the 24-hour check continue after the USB cable is disconnected. */
+    if (!strcmp(url, DASH_HUB_STATUS_URL)) {
+        char metric[24];
+        snprintf(metric, sizeof(metric), "%u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        esp_http_client_set_header(c, "X-Dash-Heap-Free", metric);
+        snprintf(metric, sizeof(metric), "%u", (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+        esp_http_client_set_header(c, "X-Dash-Heap-Min", metric);
+        snprintf(metric, sizeof(metric), "%lld", (long long)(esp_timer_get_time()/1000000));
+        esp_http_client_set_header(c, "X-Dash-Uptime", metric);
+    }
     int post_len = post ? (int)strlen(post) : 0;
     if (post) {
         esp_http_client_set_header(c, "Content-Type", "application/json");

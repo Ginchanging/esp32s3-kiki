@@ -7,16 +7,19 @@ homeassistant:
   time_zone: Asia/Shanghai
   unit_system: metric
   currency: CNY
+  external_url: https://ha.kiki-home.top
 
-# Listen on localhost only; reach the UI with: ssh -L 8123:127.0.0.1:8123 esp-hub
-http:
-  server_host: 127.0.0.1
-  server_port: 8123
+# HA >= 2026.8 keeps HTTP settings in its network configuration, not YAML.
+# Bootstrap is isolated by Docker's loopback-only port publication. deploy.sh ha
+# confirms localhost:8123 via the admin API before enabling host networking.
 
 frontend:
 config:
 api:
 webhook:      # Xiaomi OAuth lands on /api/webhook/<id>
+mobile_app:   # selected Apple Health sensors from the official iPhone companion
+kiki_health_reports:
+  entities: !include health_recorder.yaml
 logger:
   default: warning
 
@@ -24,3 +27,7 @@ logger:
 recorder:
   purge_keep_days: 3
   commit_interval: 30
+  exclude:
+    entities: !include health_recorder.yaml
+    entity_globs:
+      - sensor.kiki_health_reports

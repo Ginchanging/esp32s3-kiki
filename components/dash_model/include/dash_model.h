@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "dash_flights.h"
 #include "dash_calendar.h"
+#include "dash_health.h"
 #include "dash_idle.h"
 
 #ifdef __cplusplus
@@ -205,6 +206,7 @@ typedef struct {
     /* Independent flight endpoint: its failures never change dashboard freshness. */
     dash_flights_t flights;
     dash_calendar_t calendar;
+    dash_health_t health;
     dash_ota_status_t ota; /* device-owned; independent of hub dashboard freshness */
 
     /* --- fetch bookkeeping (device side) --- */

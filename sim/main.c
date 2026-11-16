@@ -70,7 +70,8 @@ static void apply_ota_demo(void)
     else state.ota.phase = DASH_OTA_DOWNLOADING;
 }
 
-static char fixture_paths[16][512];
+#define SIM_FIXTURE_MAX 32
+static char fixture_paths[SIM_FIXTURE_MAX][512];
 static int fixture_count;
 static int fixture_index = -1;
 
@@ -313,7 +314,7 @@ static void scan_fixtures(const char *any_path)
         return;
     }
     struct dirent *e;
-    while ((e = readdir(d)) && fixture_count < 16) {
+    while ((e = readdir(d)) && fixture_count < SIM_FIXTURE_MAX) {
         size_t n = strlen(e->d_name);
         if (n > 5 && strcmp(e->d_name + n - 5, ".json") == 0) {
             snprintf(fixture_paths[fixture_count++], 512, "%s/%s", dir, e->d_name);

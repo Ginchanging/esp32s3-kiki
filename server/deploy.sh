@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deploy the dashboard backend. Uses the SSH host aliases from ~/.ssh/config:
 #   esp-hub (8.138.138.222, root) · gcp-isbf (34.68.253.253, ginm + sudo) · aliyun-codex (8.155.132.213, root)
-# Only adds /opt/esp-dash, /etc/esp-dash and one systemd unit per host.
+# Backend targets manage /opt/esp-dash, /etc/esp-dash and their systemd unit.
+# ha-proxy additionally installs Caddy's signed stable package and its domain import.
 #   ./deploy.sh hub | gcp | codex | all | ha   (ha = Home Assistant for Mi Home, hub only)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -10,7 +11,7 @@ SEC=secrets
 push() { # host unit-file credential-pairs...
   local host="$1" unit="$2"; shift 2
   local tmp; tmp="$(ssh "$host" mktemp -d)"
-  scp -q dashd.py ota.py flight_coord_LICENSE.txt "$unit" "$host:$tmp/"
+  scp -q dashd.py ota.py health.py ha_setup.py health_watch.py flight_coord_LICENSE.txt "$unit" "$host:$tmp/"
   local creds=()
   while [ $# -gt 0 ]; do scp -q "$1" "$host:$tmp/cred_$2"; creds+=("$2"); shift 2; done
   ssh "$host" "sudo -n bash -s" <<EOF
@@ -21,6 +22,9 @@ if [ -f /opt/esp-dash/dashd.py ]; then install -m 644 /opt/esp-dash/dashd.py /op
 if [ -f /etc/systemd/system/$(basename "$unit") ]; then cp /etc/systemd/system/$(basename "$unit") /etc/systemd/system/$(basename "$unit").previous; fi
 install -m 644 $tmp/dashd.py /opt/esp-dash/dashd.py
 install -m 644 $tmp/ota.py /opt/esp-dash/ota.py
+install -m 644 $tmp/health.py /opt/esp-dash/health.py
+install -m 644 $tmp/ha_setup.py /opt/esp-dash/ha_setup.py
+install -m 644 $tmp/health_watch.py /opt/esp-dash/health_watch.py
 install -d -m 755 /opt/esp-dash/firmware
 [ -e /opt/esp-dash/firmware/.lock ] || install -m 644 /dev/null /opt/esp-dash/firmware/.lock
 install -m 644 $tmp/flight_coord_LICENSE.txt /opt/esp-dash/flight_coord_LICENSE.txt
@@ -45,7 +49,7 @@ agent_unit() { # name services -> path of a filled-in unit file
 
 deploy_hub() {
   # ha_token is written on the hub by set_ha_token.sh; an empty one just disables Mi Home
-  ssh esp-hub 'install -d -m 700 /etc/esp-dash; [ -e /etc/esp-dash/ha_token ] || install -m 600 /dev/null /etc/esp-dash/ha_token; [ -e /etc/esp-dash/flights.json ] || install -m 600 /dev/null /etc/esp-dash/flights.json'
+  ssh esp-hub 'install -d -m 700 /etc/esp-dash; [ -e /etc/esp-dash/ha_token ] || install -m 600 /dev/null /etc/esp-dash/ha_token; [ -e /etc/esp-dash/flights.json ] || install -m 600 /dev/null /etc/esp-dash/flights.json; [ -e /etc/esp-dash/health.json ] || install -m 600 /dev/null /etc/esp-dash/health.json'
   local flight_creds=()
   if [ -f "$SEC/flights.json" ]; then flight_creds=("$SEC/flights.json" flights.json); fi
   push esp-hub esp-dash-hub.service \
@@ -67,13 +71,27 @@ XH_VER=v0.5.0
 XH_SHA=fa093245846a1118c4b1d751dbe1e6298ceeccc66734ac830c062091e09496e3
 deploy_ha() {
   local tmp; tmp="$(ssh esp-hub mktemp -d)"
-  scp -q homeassistant/configuration.yaml homeassistant/run.sh "esp-hub:$tmp/"
+  scp -q homeassistant/configuration.yaml homeassistant/run.sh homeassistant/Caddyfile homeassistant/proxy.sh health.py ha_setup.py "esp-hub:$tmp/"
+  scp -qr homeassistant/custom_components/kiki_health_reports "esp-hub:$tmp/"
   ssh esp-hub "bash -s" <<EOF
 set -e
 cc=/opt/homeassistant/config/custom_components/xiaomi_home
 install -d -m 755 /opt/homeassistant/config/custom_components
+install -d -m 755 /opt/homeassistant/config/custom_components/kiki_health_reports
+install -m 644 $tmp/kiki_health_reports/__init__.py $tmp/kiki_health_reports/manifest.json /opt/homeassistant/config/custom_components/kiki_health_reports/
+if [ -f /opt/homeassistant/config/configuration.yaml ] && [ ! -f /opt/homeassistant/config/configuration.yaml.pre-health ]; then
+  cp /opt/homeassistant/config/configuration.yaml /opt/homeassistant/config/configuration.yaml.pre-health
+fi
 install -m 644 $tmp/configuration.yaml /opt/homeassistant/config/configuration.yaml
+if [ ! -e /opt/homeassistant/config/health_recorder.yaml ]; then
+  echo '[]' > /opt/homeassistant/config/health_recorder.yaml
+fi
 install -m 755 $tmp/run.sh /opt/homeassistant/run.sh
+install -d -m 755 /opt/esp-dash
+install -m 644 $tmp/health.py /opt/esp-dash/health.py
+install -m 644 $tmp/ha_setup.py /opt/esp-dash/ha_setup.py
+install -m 644 $tmp/Caddyfile /opt/esp-dash/ha.Caddyfile
+install -m 755 $tmp/proxy.sh /opt/esp-dash/ha-proxy.sh
 if [ "\$(cat \$cc/.kiki_version 2>/dev/null)" != "$XH_VER" ]; then
   curl -sSL --retry 3 -o $tmp/xh.zip https://github.com/XiaoMi/ha_xiaomi_home/releases/download/$XH_VER/xiaomi_home.zip
   echo "$XH_SHA  $tmp/xh.zip" | sha256sum -c --quiet
@@ -81,15 +99,24 @@ if [ "\$(cat \$cc/.kiki_version 2>/dev/null)" != "$XH_VER" ]; then
   echo $XH_VER > \$cc/.kiki_version
 fi
 rm -rf $tmp
-/opt/homeassistant/run.sh
+/opt/homeassistant/run.sh --bootstrap
+if [ -s /etc/esp-dash/ha_token ]; then
+  python3 /opt/esp-dash/ha_setup.py http
+  /opt/homeassistant/run.sh --host
+else
+  echo 'HA bootstrap is available only at localhost:8123 via an SSH tunnel.'
+  echo 'Create the administrator account, run server/set_ha_token.sh locally, then rerun deploy.sh ha.'
+fi
 EOF
 }
 
 case "${1:-all}" in
   hub) deploy_hub ;;
   ha) deploy_ha ;;
+  ha-proxy) ssh esp-hub /opt/esp-dash/ha-proxy.sh ;;
+  health) ssh esp-hub python3 /opt/esp-dash/ha_setup.py bind "${@:2}" ;;
   gcp) deploy_gcp ;;
   codex) deploy_codex ;;
   all) deploy_hub; deploy_gcp; deploy_codex ;;
-  *) echo "usage: $0 hub|gcp|codex|all|ha" >&2; exit 2 ;;
+  *) echo "usage: $0 hub|gcp|codex|all|ha|ha-proxy|health [--device ID]" >&2; exit 2 ;;
 esac

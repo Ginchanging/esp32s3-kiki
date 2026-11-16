@@ -150,6 +150,8 @@ extern const char fx_down_start[] asm("_binary_4_server_down_json_start");
 extern const char fx_down_end[] asm("_binary_4_server_down_json_end");
 extern const char fx_flight_start[] asm("_binary_9_flight_json_start");
 extern const char fx_flight_end[] asm("_binary_9_flight_json_end");
+extern const char fx_health_start[] asm("_binary_20_health_json_start");
+extern const char fx_health_end[] asm("_binary_20_health_json_end");
 
 bool app_demo_load(const char *name)
 {
@@ -164,6 +166,8 @@ bool app_demo_load(const char *name)
         start = fx_down_start, end = fx_down_end;
     } else if (!strcmp(name, "flight")) {
         start = fx_flight_start, end = fx_flight_end;
+    } else if (!strcmp(name, "health")) {
+        start = fx_health_start, end = fx_health_end;
     }
     if (!start) {
         return false;
@@ -172,6 +176,15 @@ bool app_demo_load(const char *name)
     bool ok = dash_model_parse(st, start, (size_t)(end - start));
     if (ok) {
         int64_t now = time(NULL);
+        if (st->health.configured) {
+            int64_t shift = now-st->health.fetched_at;
+            st->health.fetched_at = now;
+            st->health.since += shift;
+            if (st->health.weight_at) st->health.weight_at += shift;
+            st->health.day = dash_local_day(now);
+            for (int i = 0; i < DASH_HEALTH_METRICS; ++i)
+                if (st->health.source_at[i]) st->health.source_at[i] += shift;
+        }
         memset(&st->flights, 0, sizeof(st->flights));
         if (dash_flights_parse(&st->flights, start, (size_t)(end-start))) {
             st->flights.fetched_at = now;
@@ -197,6 +210,7 @@ void app_demo_off(void)
     st->have_hub = false;
     st->run_count = st->server_count = st->event_count = st->mi_count = 0;
     st->have_mi = false;
+    dash_health_init(&st->health);
     memset(&st->flights, 0, sizeof(st->flights));
     app_unlock(true);
     app_notify_token_changed(); /* wake the fetch task */

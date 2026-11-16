@@ -306,7 +306,15 @@ void ui_task(void *arg)
     printf("dash: ui ready lang=%s heap=%u\n", lang == DASH_LANG_EN ? "en" : "zh",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
-    static dash_state_t local; /* ~3.5 KB, keep off the task stack */
+    /* This private UI snapshot never feeds DMA. Keep the long-lived copy in
+     * PSRAM so pages and language rebuilds leave internal RAM for LVGL/Wi-Fi. */
+    dash_state_t *local = heap_caps_malloc(sizeof(*local), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!local) local = heap_caps_malloc(sizeof(*local), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!local) {
+        printf("dash: cannot allocate UI snapshot\n");
+        vTaskDelete(NULL);
+        return;
+    }
     static dash_event_cursor_t cursor;
     uint32_t muse_seen = 0;
     int64_t next_update = 0, next_stats = 30000;
@@ -342,24 +350,24 @@ void ui_task(void *arg)
         }
         if (app_take_dirty() || now_ms >= next_update) {
             dash_state_t *st = app_lock();
-            local = *st;
+            *local = *st;
             app_unlock(false);
             int64_t now = time(NULL);
-            dash_ui_update(&local, now);
-            if (local.muse_seq != muse_seen && local.muse_count) {
-                if (local.muse[0].src == DASH_SRC_MUSE) {
-                    dash_ui_show_muse(local.muse[0].text, local.muse[0].ts, 6000);
+            dash_ui_update(local, now);
+            if (local->muse_seq != muse_seen && local->muse_count) {
+                if (local->muse[0].src == DASH_SRC_MUSE) {
+                    dash_ui_show_muse(local->muse[0].text, local->muse[0].ts, 6000);
                 } else {
-                    dash_ui_show_agent(&local.muse[0], local.muse[0].src == DASH_SRC_KIKI ? 15000 : 6000);
+                    dash_ui_show_agent(&local->muse[0], local->muse[0].src == DASH_SRC_KIKI ? 15000 : 6000);
                 }
             }
-            muse_seen = local.muse_seq;
+            muse_seen = local->muse_seq;
             dash_event_t fresh[DASH_MAX_EVENTS];
-            int n = dash_events_take_new(&cursor, &local, fresh, DASH_MAX_EVENTS);
+            int n = dash_events_take_new(&cursor, local, fresh, DASH_MAX_EVENTS);
             const dash_event_t *last = NULL;
             for (int i = 0; i < n; ++i) {
                 static dash_muse_msg_t m; /* ~300 B, keep it off the task stack */
-                if (dash_ui_mi_event_msg(&local, &fresh[i], &m)) {
+                if (dash_ui_mi_event_msg(local, &fresh[i], &m)) {
                     app_agent_arrived(&m, now); /* mailbox + Kiki + LED, like an agent push */
                 } else {
                     last = &fresh[i];
@@ -377,10 +385,10 @@ void ui_task(void *arg)
             next_update = now_ms + 1000;
 
             /* Kiki's diary at 23:00 (weekly report on Sundays), once the hub has answered */
-            dash_diary_t due = local.clock_valid ? dash_diary_due(now, (int32_t)diary_day) : DASH_DIARY_NONE;
-            bool hub_ready = local.have_hub || local.fetch_failures >= DASH_OFFLINE_AFTER_FAILS;
+            dash_diary_t due = local->clock_valid ? dash_diary_due(now, (int32_t)diary_day) : DASH_DIARY_NONE;
+            bool hub_ready = local->have_hub || local->fetch_failures >= DASH_OFFLINE_AFTER_FAILS;
             if (diary_forced || (due != DASH_DIARY_NONE && hub_ready)) {
-                write_diary(&local, now, diary_forced ? diary_forced == 2 : due == DASH_DIARY_WEEK);
+                write_diary(local, now, diary_forced ? diary_forced == 2 : due == DASH_DIARY_WEEK);
                 if (!diary_forced) {
                     diary_day = (uint32_t)dash_local_day(now);
                     app_nvs_set_u32("dash", "diary_day", diary_day);
