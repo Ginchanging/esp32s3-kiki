@@ -32,12 +32,14 @@ static void wipe(void *p, size_t n)
  * error); the reply lands in body/len. */
 int app_hub_json(const char *url, const char *token, const char *post, char *out, int cap, int *len)
 {
+    int timeout_ms = !strcmp(url, DASH_HUB_FLIGHTS_URL) ? 5000 : 10000;
+    if (!strncmp(url, DASH_HUB_ACTIONS_URL "?", sizeof(DASH_HUB_ACTIONS_URL "?") - 1)) timeout_ms = 6000;
     esp_http_client_config_t cfg = {
         .url = url,
         .method = post ? HTTP_METHOD_POST : HTTP_METHOD_GET,
         .cert_pem = hub_pem_start,
         .common_name = DASH_HUB_CN,
-        .timeout_ms = !strcmp(url, DASH_HUB_FLIGHTS_URL) ? 5000 : 10000,
+        .timeout_ms = timeout_ms,
         .buffer_size = 2048,
         .disable_auto_redirect = true,
     };
@@ -89,6 +91,22 @@ int app_hub_json(const char *url, const char *token, const char *post, char *out
 static int hub_request(const char *url, const char *token, const char *post, int *len)
 {
     return app_hub_json(url, token, post, body, BODY_MAX, len);
+}
+
+static void fetch_action_detail(const char *token)
+{
+    dash_action_query_t query;
+    uint32_t seq;
+    if (!app_take_action_request(&query, &seq)) return;
+
+    int len = 0, status = -1;
+    if (token && !app_demo_active()) {
+        char url[200];
+        snprintf(url, sizeof(url), DASH_HUB_ACTIONS_URL "?run_id=%lld&attempt=%d&jobs_page=%d&job_id=%lld&steps_page=%d",
+                 (long long)query.run_id, query.attempt, query.jobs_page, (long long)query.job_id, query.steps_page);
+        status = hub_request(url, token, NULL, &len);
+    }
+    app_finish_action_request(seq, status == 200 ? body : NULL, (size_t)len);
 }
 
 /* Demo mode has no hub: flip the demo state so the 米家 page still reacts. */
@@ -147,6 +165,7 @@ void fetch_task(void *arg)
     int64_t next_status = 0, next_flight = 0, next_calendar = 0;
     for (;;) {
         if (!campus_net_wait_online(500)) {
+            fetch_action_detail(NULL);
             continue;
         }
         bool token_changed = app_take_token_changed();
@@ -157,6 +176,7 @@ void fetch_task(void *arg)
             next_calendar = 0;
         }
         if (app_demo_active()) {
+            fetch_action_detail(NULL);
             if (app_take_mi_request(mi_dev, sizeof(mi_dev), &mi_on, &mi_bri)) {
                 mi_demo(mi_dev, mi_on, mi_bri);
             }
@@ -164,6 +184,7 @@ void fetch_task(void *arg)
             continue;
         }
         if (!token[0]) {
+            fetch_action_detail(NULL);
             if (!warned_no_token) {
                 printf("dash: no hub token yet (run: campus.py token)\n");
                 warned_no_token = true;
@@ -209,6 +230,7 @@ void fetch_task(void *arg)
         }
         bool flight = now_ms < next_status;
         if (flight && now_ms < next_flight) {
+            fetch_action_detail(token);
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
@@ -230,13 +252,13 @@ void fetch_task(void *arg)
             st->fetch_failures = 0;
             st->last_fetch_ok = time(NULL);
             app_fetch_ok_now();
-            app_ota_hub_ok();
         } else if (!app_demo_active()) {
             st->fetch_failures++;
         }
         int runs = st->run_count, servers = st->server_count;
         int aircraft = st->flights.count;
         app_unlock(true);
+        if (!flight) app_ota_hub_result(status, ok);
         if (flight) {
             printf("dash: flights %s http=%d bytes=%d ms=%d aircraft=%d\n", ok ? "ok" : "failed",
                    status, len, ms, aircraft);
@@ -251,6 +273,7 @@ void fetch_task(void *arg)
         int64_t done_ms = esp_timer_get_time() / 1000;
         if (flight) next_flight = done_ms + DASH_FLIGHT_PERIOD_MS;
         else next_status = done_ms + (ok ? DASH_FETCH_PERIOD_MS : 10000);
+        fetch_action_detail(token);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

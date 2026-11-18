@@ -24,8 +24,8 @@ class FlightsTest(unittest.TestCase):
         self.write = patch.object(dashd, "save_state")
         self.saved = self.write.start()
         self.addCleanup(self.write.stop)
-        self.r = dashd.FlightRadar({"lon": 113.5773054, "lat": 22.35591073, "radius_m": 20000,
-                                    "alert_radius_m": 5000}, clock=lambda: self.t)
+        self.r = dashd.FlightRadar({"lon": 113.5773054, "lat": 22.35591073, "radius_m": 20000},
+                                   clock=lambda: self.t)
         self.r.meta["CSN8798"] = (self.t+10000, {"flight": "CZ8798", "airline": "China Southern",
                                                "origin": "TNA", "destination": "SZX"})
 
@@ -80,9 +80,9 @@ class FlightsTest(unittest.TestCase):
         self.t += 121
         self.ingest(self.plane(9000))
         self.t += 1
-        self.ingest(self.plane(5001))
+        self.ingest(self.plane(3001))
         self.assertEqual(self.r.events, [])
-        self.ingest(self.plane(4999))
+        self.ingest(self.plane(2999))
         self.assertEqual(len(self.r.events), 1)
         self.ingest(self.plane(3000))
         self.assertEqual(len(self.r.events), 1)

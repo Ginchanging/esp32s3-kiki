@@ -3,6 +3,7 @@
 
   dashd.py hub    HTTPS server on 8.138.138.222:8443
                   GET  /api/device/status   (device token)  -> JSON for the ESP32
+                  GET  /api/device/actions  (device token)  -> jobs or steps for a run attempt
                   POST /api/device/mi       (device token)  <- {"dev":"lamp","on":true,"bri":60}
                   POST /api/agent/report    (agent token)   <- metrics from other servers
                   polls GitHub Actions for one repository
@@ -47,6 +48,15 @@ ONLINE_WINDOW_S = 90
 MAX_BODY = 16 * 1024
 CN_TZ = datetime.timezone(datetime.timedelta(hours=8))  # Kiki's days follow China time
 LEDGER_DAYS = 7
+GITHUB_RUNS = 5
+ACTION_BATCH = 6  # matches DASH_ACTION_BATCH; each reply fits the device's 8 KiB buffer
+ACTION_MAX_PAGE = 65535
+GITHUB_MAX_ID = (1 << 53) - 1  # exact in the device's JSON number representation
+GITHUB_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "esp-dash-hub",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
 
 
 def log(*parts):
@@ -60,6 +70,46 @@ def cn_date(ts=None):
 def wire_text(value, limit):
     """The shared C fields are UTF-8 byte budgets, not Python character counts."""
     return str(value or "").encode("utf-8", "replace")[:limit].decode("utf-8", "ignore")
+
+
+def action_query(query):
+    fields = urllib.parse.parse_qs(query, strict_parsing=True, keep_blank_values=True, max_num_fields=5)
+    names = ("run_id", "attempt", "jobs_page", "job_id", "steps_page")
+    if any(k not in names or len(v) != 1 or not re.fullmatch(r"[0-9]{1,16}", v[0])
+           for k, v in fields.items()):
+        raise ValueError("invalid Actions query")
+    run_id, attempt, jobs_page, job_id, steps_page = (int(fields.get(k, ["0"])[0]) for k in names)
+    if not (0 < run_id <= GITHUB_MAX_ID and 0 < attempt <= 2147483647 and
+            0 < jobs_page <= ACTION_MAX_PAGE and 0 <= job_id <= GITHUB_MAX_ID and
+            0 <= steps_page <= ACTION_MAX_PAGE and bool(job_id) == bool(steps_page)):
+        raise ValueError("invalid Actions query")
+    return run_id, attempt, jobs_page, job_id, steps_page
+
+
+def action_item(item, id_key, now):
+    ident = item.get(id_key)
+    if type(ident) is not int or not 0 < ident <= GITHUB_MAX_ID:
+        raise ValueError("invalid Actions item ID")
+
+    def stamp(key):
+        value = item.get(key)
+        if isinstance(value, str):
+            try:
+                date = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if date.tzinfo is not None:
+                    return date.timestamp()
+            except (ValueError, OverflowError):
+                pass
+        return None
+
+    start, end = stamp("started_at"), stamp("completed_at")
+    if end is None and item.get("status") == "in_progress":
+        end = now
+    seconds = int(end - start) if start is not None and end is not None and end >= start else -1
+    name = " ".join(str(item.get("name") or "").replace("\0", "").split())
+    return {"id": ident, "name": wire_text(name, 95),
+            "status": wire_text(item.get("status"), 24), "conclusion": wire_text(item.get("conclusion"), 24) or None,
+            "duration_s": min(seconds, 2147483647)}
 
 
 def state_path(name):
@@ -224,6 +274,7 @@ class Hub:
         self.repo = repo
         self.github_token = github_token
         self.github = {"repo": repo, "fetched_at": 0, "runs": []}
+        self.action_cache = {}  # (run ID, attempt, jobs page) -> (monotonic expiration, paged jobs with steps)
         self.etag = None
         self.run_seen = {}  # run id -> (status, conclusion)
         self.github_baseline = False
@@ -254,12 +305,8 @@ class Hub:
 
     # --- GitHub ---
     def poll_github(self):
-        url = f"https://api.github.com/repos/{self.repo}/actions/runs?per_page=4&exclude_pull_requests=true"
-        req = urllib.request.Request(url, headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "esp-dash-hub",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
+        url = f"https://api.github.com/repos/{self.repo}/actions/runs?per_page={GITHUB_RUNS}&exclude_pull_requests=true"
+        req = urllib.request.Request(url, headers=GITHUB_HEADERS)
         if self.etag:
             req.add_header("If-None-Match", self.etag)
         if self.github_token:
@@ -280,7 +327,7 @@ class Hub:
             return
         now = int(time.time())
         runs = []
-        for r in data.get("workflow_runs", [])[:4]:
+        for r in data.get("workflow_runs", [])[:GITHUB_RUNS]:
             started = parse_time(r.get("run_started_at") or r.get("created_at"))
             updated = parse_time(r.get("updated_at"))
             end = updated if r.get("status") == "completed" else now
@@ -289,6 +336,7 @@ class Hub:
                 "workflow": (r.get("name") or "")[:47],
                 "branch": (r.get("head_branch") or "")[:39],
                 "run_number": r.get("run_number"),
+                "attempt": r.get("run_attempt") or 1,
                 "status": r.get("status"),
                 "conclusion": r.get("conclusion"),
                 "duration_s": max(0, end - started) if started else 0,
@@ -312,6 +360,62 @@ class Hub:
                 keep = {r["id"] for r in runs}
                 self.run_seen = {k: v for k, v in self.run_seen.items() if k in keep}
             self.github = {"repo": self.repo, "fetched_at": now, "runs": runs}
+
+    def action_jobs(self, run_id, attempt, jobs_page):
+        key = run_id, attempt, jobs_page
+        with self.lock:
+            cached = self.action_cache.get(key)
+            if cached and time.monotonic() < cached[0]:
+                return cached[1]
+            completed = any(r["id"] == run_id and r["attempt"] == attempt and r["status"] == "completed"
+                            for r in self.github["runs"])
+        # Scope all lookups to the configured repo and the attempt shown on the device.
+        # https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt
+        url = (f"https://api.github.com/repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}/jobs"
+               f"?per_page={ACTION_BATCH}&page={jobs_page}")
+        req = urllib.request.Request(url, headers=GITHUB_HEADERS)
+        if self.github_token:
+            req.add_unredirected_header("Authorization", f"Bearer {self.github_token}")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            limit = 1024 * 1024
+            body = resp.read(limit + 1)
+        if len(body) > limit:
+            raise ValueError("Actions response exceeded limit")
+        data = json.loads(body)
+        jobs, total = data["jobs"], data["total_count"]
+        if (not isinstance(jobs, list) or len(jobs) > ACTION_BATCH or
+                type(total) is not int or not 0 <= total <= ACTION_BATCH * ACTION_MAX_PAGE or
+                (jobs and total < (jobs_page - 1) * ACTION_BATCH + len(jobs))):
+            raise ValueError("invalid Actions job page")
+        now = time.time()
+        rows = []
+        for job in jobs:
+            if job.get("run_id") != run_id:
+                raise ValueError("job belongs to a different run")
+            steps = job.get("steps") or []
+            rows.append((action_item(job, "id", now), [action_item(step, "number", now) for step in steps]))
+        result = total, rows
+        if rows:  # queued runs can gain their first job at any time
+            with self.lock:
+                self.action_cache.pop(key, None)
+                if len(self.action_cache) >= 12:
+                    self.action_cache.pop(next(iter(self.action_cache)))
+                self.action_cache[key] = time.monotonic() + (120 if completed else 6), result
+        return result
+
+    def action_snapshot(self, run_id, attempt, jobs_page, job_id, steps_page):
+        total, jobs = self.action_jobs(run_id, attempt, jobs_page)
+        if job_id:
+            steps = next((steps for job, steps in jobs if job["id"] == job_id), None)
+            if steps is None:
+                raise LookupError("job not on this page")
+            total = len(steps)
+            offset = (steps_page - 1) * ACTION_BATCH
+            rows = steps[offset:offset + ACTION_BATCH]
+        else:
+            rows = [job for job, _ in jobs]
+        return {"schema": 1, "run_id": run_id, "attempt": attempt, "jobs_page": jobs_page,
+                "job_id": job_id, "steps_page": steps_page, "total": total, "rows": rows}
 
     # --- servers ---
     def report(self, payload):
@@ -375,7 +479,7 @@ class Hub:
             github["repo"] = wire_text(github.get("repo"), 47)
             github["runs"] = [{**r, "workflow": wire_text(r.get("workflow"), 47),
                                "branch": wire_text(r.get("branch"), 39)}
-                              for r in github.get("runs", [])[:4]]
+                              for r in github.get("runs", [])[:GITHUB_RUNS]]
             if self.contrib:
                 github["contrib"] = {**self.contrib, "user": wire_text(self.contrib.get("user"), 23)}
             snap = {
@@ -898,7 +1002,7 @@ def flight_number(value):
 
 
 def flight_wgs84(lon, lat, coord_type):
-    """Normalize a configured point. BD-09 inverse is approximate, ample for a 5 km circle.
+    """Normalize a configured point. BD-09 inverse is approximate, ample for a 3 km circle.
 
     Conversion formula adapted from wandergis/coordtransform (MIT).
     https://github.com/wandergis/coordtransform
@@ -969,7 +1073,7 @@ class FlightRadar:
     def __init__(self, config, get_json=flight_json, clock=time.time):
         self.lon, self.lat = flight_wgs84(config["lon"], config["lat"], config.get("coord_type", "wgs84"))
         self.radius = config.get("radius_m", 20000)
-        self.alert_radius = config.get("alert_radius_m", 5000)
+        self.alert_radius = config.get("alert_radius_m", 3000)
         if (not flight_number(self.radius) or not flight_number(self.alert_radius)
                 or not 1000 <= self.alert_radius <= self.radius <= 100000):
             raise ValueError("invalid flight radii")
@@ -1254,12 +1358,32 @@ def make_handler(hub, device_token, agent_tokens):
             if path.path.startswith("/api/device/ota/images/"):
                 return self.ota_image(path.path)
             is_calendar = path.path == "/api/device/calendar"
-            if not is_calendar and self.path not in ("/api/device/status", "/api/device/flights", "/api/device/diagnostics"):
+            is_actions = path.path == "/api/device/actions"
+            if not (is_calendar or is_actions) and self.path not in (
+                    "/api/device/status", "/api/device/flights", "/api/device/diagnostics"):
                 return self.send_json(404, {"error": "not found"})
             if not hmac.compare_digest(self.bearer().encode(), device_token.encode()):
                 return self.send_json(401, {"error": "unauthorized"})
             if self.path == "/api/device/diagnostics":
                 return self.send_json(200, dict(getattr(hub, "device_diagnostics", {})))
+            if is_actions:
+                try:
+                    query = action_query(path.query)
+                except ValueError:
+                    return self.send_json(400, {"error": "invalid Actions query"})
+                try:
+                    result = hub.action_snapshot(*query)
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        return self.send_json(404, {"error": "Actions run unavailable"})
+                    log("github jobs http", e.code)
+                    return self.send_json(502, {"error": "Actions unavailable"})
+                except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError,
+                        TypeError, KeyError, AttributeError):
+                    return self.send_json(502, {"error": "Actions unavailable"})
+                except LookupError:
+                    return self.send_json(404, {"error": "Actions job unavailable"})
+                return self.send_json(200, result)
             if is_calendar:
                 try:
                     # Python 3.10 rejects an empty query under these flags;

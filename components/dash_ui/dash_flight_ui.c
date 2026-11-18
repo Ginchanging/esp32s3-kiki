@@ -260,14 +260,20 @@ static void marker_clicked(lv_event_t *e)
     if (fl.data) dash_flight_ui_update(fl.data, now(), fl.scene_now, fl.busy);
 }
 
-static void next_clicked(lv_event_t *e)
+void dash_flight_ui_step(int delta)
 {
-    if (!fl.data || !fl.data->count) return;
+    if (!fl.data || !fl.data->count || !delta) return;
     int index = -1;
     for (int i = 0; i < fl.data->count; ++i) if (same(&fl.selected, &fl.data->aircraft[i])) index = i;
-    int step = (int)(intptr_t)lv_event_get_user_data(e);
-    select_index((index+step+fl.data->count)%fl.data->count);
+    if (index < 0) index = delta > 0 ? -1 : 0;
+    int n = fl.data->count;
+    select_index(((index + delta % n) % n + n) % n);
     dash_flight_ui_update(fl.data, now(), fl.scene_now, fl.busy);
+}
+
+static void next_clicked(lv_event_t *e)
+{
+    dash_flight_ui_step((int)(intptr_t)lv_event_get_user_data(e));
 }
 
 static void plane_art(dash_pix_t *p)
@@ -412,7 +418,7 @@ void dash_flight_ui_update(const dash_flights_t *st, int64_t utc, int64_t scene_
                               status == DASH_FLIGHT_ERROR ? S_OFFLINE : S_NO_DATA));
     char buf[160], age[32];
     int radius = st->radius_m ? st->radius_m : 20000;
-    int alert = st->alert_radius_m ? st->alert_radius_m : 5000;
+    int alert = st->alert_radius_m ? st->alert_radius_m : 3000;
     snprintf(buf, sizeof(buf), "%d km", radius/1000);
     set_text(fl.range, buf);
     snprintf(buf, sizeof(buf), "%d km", alert/1000);

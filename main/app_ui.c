@@ -226,6 +226,11 @@ static void save_pomo(int count, int minutes, int yday)
     app_nvs_set_blob("dash", "pomo_wk", week, sizeof(week));
 }
 
+static void save_pomo_duration(int minutes)
+{
+    app_nvs_set_u32("dash", "pomo_focus", (uint32_t)minutes);
+}
+
 /* Kiki's diary: 0 = none pending, 1 = daily, 2 = weekly (CAT diary [week]) */
 static int diary_forced;
 static uint32_t diary_day; /* dash_local_day() of the last diary (NVS dash/diary_day) */
@@ -282,6 +287,7 @@ void ui_task(void *arg)
     uint32_t lang = DASH_LANG_ZH;
     app_nvs_get_u32("dash", "lang", &lang);
 
+    app_ota_ui_startup("ui_display_init");
     lv_init();
     lv_tick_set_cb(tick_ms);
     lv_display_t *disp = display_create();
@@ -290,6 +296,10 @@ void ui_task(void *arg)
     app_nvs_get_u32("dash", "pomo_min", &pm);
     app_nvs_get_u32("dash", "pomo_day", &pd);
     dash_ui_pomo_restore((int)pn, (int)pm, (int)pd);
+    uint32_t focus = 25;
+    app_nvs_get_u32("dash", "pomo_focus", &focus);
+    dash_ui_pomo_duration_restore(focus <= 60 ? (int)focus : 25);
+    dash_ui_set_pomo_duration_cb(save_pomo_duration);
     dash_pomo_day_t week[DASH_DAYS];
     size_t week_len = sizeof(week);
     if (app_nvs_get_blob("dash", "pomo_wk", week, &week_len) == ESP_OK && week_len == sizeof(week)) {
@@ -299,8 +309,11 @@ void ui_task(void *arg)
     dash_ui_set_pomo_cb(save_pomo);
     dash_ui_set_mi_cb(app_request_mi); /* taps on the 米家 page; the fetch task sends them */
     dash_ui_set_calendar_cb(app_request_calendar);
+    dash_ui_set_action_cb(app_request_action);
+    app_ota_ui_startup("ui_build");
     dash_ui_create(disp, lang == DASH_LANG_EN ? DASH_LANG_EN : DASH_LANG_ZH);
     dash_ui_set_lang_cb(save_lang);
+    app_ota_ui_startup("ui_first_frame");
     lv_refr_now(disp);      /* draw the first frame while the backlight is still off */
     app_lcd_backlight_on(); /* so the panel's power-on noise never shows */
     printf("dash: ui ready lang=%s heap=%u\n", lang == DASH_LANG_EN ? "en" : "zh",
@@ -308,13 +321,19 @@ void ui_task(void *arg)
 
     /* This private UI snapshot never feeds DMA. Keep the long-lived copy in
      * PSRAM so pages and language rebuilds leave internal RAM for LVGL/Wi-Fi. */
-    dash_state_t *local = heap_caps_malloc(sizeof(*local), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!local) local = heap_caps_malloc(sizeof(*local), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!local) {
+    struct {
+        dash_state_t state;
+        app_action_reply_t action;
+    } *snapshot = heap_caps_malloc(sizeof(*snapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snapshot) snapshot = heap_caps_malloc(sizeof(*snapshot), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!snapshot) {
+        app_ota_ui_startup("ui_snapshot_alloc");
         printf("dash: cannot allocate UI snapshot\n");
         vTaskDelete(NULL);
         return;
     }
+    dash_state_t *local = &snapshot->state;
+    app_ota_ui_startup("ui_first_update");
     static dash_event_cursor_t cursor;
     uint32_t muse_seen = 0;
     int64_t next_update = 0, next_stats = 30000;
@@ -339,8 +358,9 @@ void ui_task(void *arg)
             apply_cat_request(cat_req);
         }
         int knob_ev, knob_steps;
-        while (app_knob_take(&knob_ev, &knob_steps)) {
-            dash_ui_knob((dash_knob_ev_t)knob_ev, knob_steps);
+        uint32_t knob_at;
+        while (app_knob_take(&knob_ev, &knob_steps, &knob_at)) {
+            dash_ui_knob_at((dash_knob_ev_t)knob_ev, knob_steps, knob_at);
         }
         dash_lang_t req;
         if (app_take_lang_request(&req)) {
@@ -354,6 +374,10 @@ void ui_task(void *arg)
             app_unlock(false);
             int64_t now = time(NULL);
             dash_ui_update(local, now);
+            app_action_reply_t *reply = &snapshot->action;
+            if (app_take_action_reply(reply)) {
+                dash_ui_action_reply(reply->seq, reply->ok ? &reply->page : NULL);
+            }
             if (local->muse_seq != muse_seen && local->muse_count) {
                 if (local->muse[0].src == DASH_SRC_MUSE) {
                     dash_ui_show_muse(local->muse[0].text, local->muse[0].ts, 6000);

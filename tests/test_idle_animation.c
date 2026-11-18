@@ -91,6 +91,33 @@ int main(void)
     assert(dash_cat_reacting() == DASH_CAT_REACT_NONE);
     assert(shows(DASH_LOOK_REST) || shows(DASH_LOOK_REST_2) || shows(DASH_LOOK_REST_BLINK));
 
+    assert(dash_cat_pet());
+    run(50);
+    assert(shows(DASH_LOOK_PET_LEAN));
+    assert(!dash_cat_pet()); /* a repeated pet cannot restart its first frame */
+    run(650);
+    assert(shows(DASH_LOOK_PET_BELLY));
+    dash_cat_react(DASH_CAT_REACT_CI_FAIL);
+    assert(!dash_cat_pet());
+    run(50);
+    assert(shows(DASH_LOOK_PUFFED)); /* real notifications preempt the belly rub */
+    run(2700);
+    assert(dash_cat_pet());
+    run(4000);
+    assert(dash_cat_reacting() == DASH_CAT_REACT_NONE);
+    assert(shows(DASH_LOOK_REST) || shows(DASH_LOOK_REST_2) || shows(DASH_LOOK_REST_BLINK));
+    assert(!dash_cat_pet());
+    run(2050);
+    assert(dash_cat_pet());
+    run(700);
+    dash_cat_destroy();
+    lv_obj_clean(root);
+    image = dash_cat_create(root, 0, 0);
+    dash_cat_set_ctx(&ctx);
+    run(50);
+    assert(shows(DASH_LOOK_PET_BELLY)); /* rebuilding retains the reaction phase */
+    run(3400);
+
     ctx.pomo = DASH_POMO_FOCUS;
     dash_cat_set_ctx(&ctx);
     run(50);

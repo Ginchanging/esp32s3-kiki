@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "dash_model.h"
+#include "dash_actions.h"
 #include "lvgl.h"
 
 #ifdef __cplusplus
@@ -21,10 +22,12 @@ extern "C" {
 
 typedef void (*dash_ui_lang_cb_t)(dash_lang_t lang);
 typedef void (*dash_ui_pomo_cb_t)(int count, int minutes, int yday);
+typedef void (*dash_ui_pomo_duration_cb_t)(int minutes);
 /* Mi Home control request from a tap: on = 0/1 (-1 keep), bri = 1..100 (-1 keep). The app sends it
  * to the hub; the card shows "..." until the device state follows, or "failed" after 12 s. */
 typedef void (*dash_ui_mi_cb_t)(const char *dev, int on, int bri);
 typedef void (*dash_ui_calendar_cb_t)(int32_t day, uint16_t offset);
+typedef uint32_t (*dash_ui_action_cb_t)(const dash_action_query_t *query); /* NULL cancels */
 
 void dash_ui_create(lv_display_t *disp, dash_lang_t lang);
 /* Double-tap on any page (not on a button) -> Kiki's room. dash_ui_create() attaches every
@@ -53,15 +56,20 @@ void dash_ui_set_page(int page, bool anim);
 void dash_ui_step_page(int delta);
 int dash_ui_get_page(void);
 
-/* Pomodoro: 25 min focus / 5 min break. Today's totals are persisted by the app. */
+/* Pomodoro: configurable 15..60 min focus (default 25), fixed 5 min break. */
 void dash_ui_set_pomo_cb(dash_ui_pomo_cb_t cb);
 void dash_ui_pomo_restore(int count, int minutes, int yday);
 void dash_ui_pomo_toggle(void); /* start / pause / resume */
+void dash_ui_set_pomo_duration_cb(dash_ui_pomo_duration_cb_t cb);
+void dash_ui_pomo_duration_restore(int minutes); /* invalid values -> 25; next session only */
 
 /* Mi Home */
 void dash_ui_set_mi_cb(dash_ui_mi_cb_t cb);
 /* Read-only calendar requests; the callback queues work outside the LVGL task. */
 void dash_ui_set_calendar_cb(dash_ui_calendar_cb_t cb);
+void dash_ui_set_action_cb(dash_ui_action_cb_t cb);
+/* Invoke on the UI task; NULL means the requested detail is unavailable. */
+void dash_ui_action_reply(uint32_t seq, const dash_action_page_t *page);
 /* A DASH_EVK_MI_DONE event -> a mailbox message in the current language (false for other events). */
 bool dash_ui_mi_event_msg(const dash_state_t *st, const dash_event_t *e, dash_muse_msg_t *out);
 
@@ -74,8 +82,8 @@ void dash_ui_pomo_week_restore(const dash_pomo_day_t in[DASH_DAYS]);
  * dash_ui_show_agent(). Counts come from st->days, pomodoros from the week above. */
 void dash_ui_diary_msg(const dash_state_t *st, int64_t now, bool weekly, dash_muse_msg_t *out);
 
-/* Rotary knob (EC11). TURN = page; HOLD_TURN (pressed while turning) = lamp brightness,
- * sent once on RELEASE or after a short pause; CLICK = lamp on/off; LONG = pomodoro. */
+/* Rotary knob (EC11). TURN/CLICK follow the page; HOLD_TURN always pages.
+ * LONG toggles pomodoro, emitted on release only when no rotation occurred. */
 typedef enum {
     DASH_KNOB_TURN = 0,
     DASH_KNOB_HOLD_TURN,
@@ -84,6 +92,8 @@ typedef enum {
     DASH_KNOB_LONG,
 } dash_knob_ev_t;
 void dash_ui_knob(dash_knob_ev_t ev, int steps);
+/* Capture time uses the same monotonic millisecond clock as LVGL, including wraparound. */
+void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms);
 
 /* What the status LED should know about. */
 void dash_ui_get_status(bool *night, uint8_t *pomo_phase, uint8_t *pomo_percent);

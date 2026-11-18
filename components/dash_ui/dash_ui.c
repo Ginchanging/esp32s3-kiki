@@ -26,7 +26,6 @@ LV_FONT_DECLARE(dash_font_zh20)
 #define PAD 10
 #define INNER_W (DASH_UI_W - 2 * PAD)
 
-#define FOCUS_MS (25 * 60 * 1000)
 #define BREAK_MS (5 * 60 * 1000)
 #define HEAT_COLS (DASH_CONTRIB_DAYS / 7)
 #define HEAT_CELL 10
@@ -40,7 +39,7 @@ typedef struct {
 static fonts_t F;
 
 typedef struct {
-    lv_obj_t *row, *dot, *name, *right;
+    lv_obj_t *row, *icon, *name, *right, *arrow;
 } run_row_t;
 
 typedef struct {
@@ -74,16 +73,17 @@ static struct {
     dash_pix_t clock;
     char clock_drawn[8];
     /* github */
-    lv_obj_t *gh_repo, *gh_block, *gh_icon, *gh_state, *gh_wf, *gh_meta, *gh_empty;
+    lv_obj_t *gh_repo, *gh_block, *gh_icon, *gh_state, *gh_wf, *gh_meta, *gh_empty, *gh_arrow, *gh_list;
     lv_obj_t *heat_card, *heat_week, *heat_today, *heat_none;
     dash_pix_t heat;
     uint8_t heat_drawn[DASH_CONTRIB_DAYS];
     bool heat_valid;
-    run_row_t runs[2];
+    run_row_t runs[DASH_MAX_RUNS];
+    int64_t gh_selected;
     /* servers */
     srv_card_t srv[DASH_MAX_SERVERS];
     /* pomodoro */
-    lv_obj_t *pomo_arc, *pomo_phase_lbl, *pomo_btn_lbl[2], *pomo_stats;
+    lv_obj_t *pomo_arc, *pomo_phase_lbl, *pomo_btn_lbl[2], *pomo_stats, *pomo_duration;
     dash_pix_t pomo_cat, pomo_time;
     char pomo_time_drawn[8];
     int pomo_cat_drawn;
@@ -125,8 +125,15 @@ static struct {
     dash_pomo_phase_t phase, paused_from;
     uint32_t end_tick, remain_ms;
     int count, minutes, yday;
+    int focus_minutes, session_minutes;
+    dash_ui_pomo_duration_cb_t duration_cb;
+    lv_timer_t *save_timer;
     dash_pomo_day_t week[DASH_DAYS]; /* per-day totals for the weekly report */
-} pomo;
+} pomo = {.focus_minutes = 25, .session_minutes = 25};
+
+static void knob_page_leave(void);
+static void knob_rebuild(void);
+static void action_close(void);
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -400,29 +407,38 @@ static uint32_t pomo_remaining(void)
         int32_t left = (int32_t)(pomo.end_tick - tick_now());
         return left > 0 ? (uint32_t)left : 0;
     }
-    return FOCUS_MS;
+    return (uint32_t)pomo.focus_minutes * 60000;
 }
 
 static uint8_t pomo_percent(void)
 {
     dash_pomo_phase_t ph = pomo.phase == DASH_POMO_PAUSED ? pomo.paused_from : pomo.phase;
-    uint32_t total = ph == DASH_POMO_BREAK ? BREAK_MS : FOCUS_MS;
+    uint32_t total = ph == DASH_POMO_BREAK ? BREAK_MS : (uint32_t)pomo.session_minutes * 60000;
     if (pomo.phase == DASH_POMO_IDLE) {
         return 0;
     }
-    return (uint8_t)(100 - (uint64_t)pomo_remaining() * 100 / total);
+    uint32_t left = pomo_remaining();
+    return left >= total ? 0 : (uint8_t)((uint64_t)(total - left) * 100 / total);
 }
 
 static void bubble_say(const char *text, uint32_t ms);
 static void popup_open(uint32_t color, const char *icon, const char *title, const char *body, uint32_t ms);
+
+static const char *pomo_focus_line(void)
+{
+    static char line[64];
+    snprintf(line, sizeof(line), dash_tr(S_REACT_POMO_START), pomo.session_minutes);
+    return line;
+}
 
 void dash_ui_pomo_toggle(void)
 {
     switch (pomo.phase) {
     case DASH_POMO_IDLE:
         pomo.phase = DASH_POMO_FOCUS;
-        pomo.end_tick = tick_now() + FOCUS_MS;
-        bubble_say(dash_tr(S_REACT_POMO_START), 4000);
+        pomo.session_minutes = pomo.focus_minutes;
+        pomo.end_tick = tick_now() + (uint32_t)pomo.session_minutes * 60000;
+        bubble_say(pomo_focus_line(), 4000);
         break;
     case DASH_POMO_FOCUS:
     case DASH_POMO_BREAK:
@@ -453,7 +469,7 @@ static void pomo_tick(void)
     if ((pomo.phase == DASH_POMO_FOCUS || pomo.phase == DASH_POMO_BREAK) && pomo_remaining() == 0) {
         if (pomo.phase == DASH_POMO_FOCUS) {
             pomo.count++;
-            pomo.minutes += FOCUS_MS / 60000;
+            pomo.minutes += pomo.session_minutes;
             pomo_changed();
             pomo.phase = DASH_POMO_BREAK;
             pomo.end_tick = tick_now() + BREAK_MS;
@@ -578,6 +594,10 @@ static void tile_changed(lv_event_t *e)
     lv_obj_t *active = lv_tileview_get_tile_active(ui.tv);
     for (int i = 0; i < DASH_UI_PAGES; ++i) {
         if (ui.tiles[i] == active) {
+            if (ui.page != i) {
+                action_close();
+                knob_page_leave();
+            }
             ui.page = i;
         }
     }
@@ -751,8 +771,8 @@ static void build_home(lv_obj_t *t)
     lv_label_set_text(name, "Kiki");
     ui.bubble_text = label_w(bub, &dash_font_zh16, T_TEXT, 44, 8, INNER_W - 52, LV_LABEL_LONG_MODE_DOTS);
 
-    /* status chips: CI · servers · mail · pomodoro; tap = open that page */
-    static const int chip_page[4] = {1, 2, 4, 3};
+    /* status chips: CI · servers · mail · Mi Home; tap = open that page */
+    static const int chip_page[4] = {1, 2, 4, 5};
     for (int i = 0; i < 4; ++i) {
         int x = PAD + i * 56;
         ui.chip[i] = card(t, x, 232, 50, 44, T_CARD);
@@ -766,7 +786,7 @@ static void build_home(lv_obj_t *t)
     }
     lv_label_set_text(ui.chip_icon[1], LV_SYMBOL_DRIVE);
     lv_label_set_text(ui.chip_icon[2], LV_SYMBOL_ENVELOPE);
-    lv_label_set_text(ui.chip_icon[3], LV_SYMBOL_BELL);
+    lv_label_set_text(ui.chip_icon[3], LV_SYMBOL_HOME);
 
     /* night: dim the whole room; a tap wakes it for 30 s */
     ui.night_veil = box(t, 0, 0, DASH_UI_W, TILE_H, 0x000000);
@@ -776,26 +796,293 @@ static void build_home(lv_obj_t *t)
     lv_obj_set_hidden(ui.night_veil, true);
 }
 
+enum {
+    ACTION_BACK, ACTION_REFRESH, ACTION_PREV, ACTION_FIRST_ROW,
+    ACTION_NEXT = ACTION_FIRST_ROW + DASH_ACTION_BATCH, ACTION_CONTROL_COUNT,
+};
+
+static dash_ui_action_cb_t action_request_cb;
+static struct {
+    lv_obj_t *panel, *icon, *meta, *title, *branch, *message, *counter;
+    lv_obj_t *controls[ACTION_CONTROL_COUNT];
+    run_row_t rows[DASH_ACTION_BATCH];
+    dash_run_t run;
+    dash_action_item_t job;
+    dash_action_query_t query;
+    dash_action_page_t page;
+    uint32_t seq;
+    int focus;
+    int64_t restore_job;
+    bool loading;
+} action;
+
+static void outline_focus(lv_obj_t *obj, bool selected)
+{
+    int width = selected ? 1 : 0;
+    if (lv_obj_get_style_outline_width(obj, 0) != width) {
+        lv_obj_set_style_outline_width(obj, width, 0);
+    }
+}
+
+static lv_obj_t *action_card(lv_obj_t *parent, int x, int y, int w, int h)
+{
+    lv_obj_t *obj = box(parent, x, y, w, h, T_CARD);
+    lv_obj_set_style_radius(obj, 6, 0);
+    lv_obj_set_style_outline_color(obj, hex(T_ACCENT), 0);
+    lv_obj_set_style_outline_pad(obj, -1, 0);
+    return obj;
+}
+
+static void action_close(void)
+{
+    if (!action.panel) return;
+    lv_obj_delete(action.panel);
+    action.panel = NULL;
+    if (action_request_cb) action_request_cb(NULL);
+}
+
+static void action_focus(int focus)
+{
+    action.focus = focus;
+    for (int i = 0; i < ACTION_CONTROL_COUNT; ++i) outline_focus(action.controls[i], focus == i);
+}
+
+static void action_header(void)
+{
+    bool steps = action.query.job_id != 0;
+    dash_run_state_t state = steps ? action.job.state : action.run.state;
+    int seconds = steps ? action.job.duration_s : action.run.duration_s;
+    char buf[96], duration[16] = "";
+    if (seconds >= 0) dash_fmt_duration(seconds, duration, sizeof(duration));
+    snprintf(buf, sizeof(buf), "#%d  %s", action.run.run_number, duration);
+    set_text(action.meta, buf);
+    set_text(action.icon, run_icon(state));
+    set_text_color(action.icon, run_color(state));
+    set_text(action.title, steps ? action.job.name : action.run.workflow);
+    const char *branch = action.run.branch;
+    snprintf(buf, sizeof(buf), LV_SYMBOL_SHUFFLE " %s", branch);
+    set_text(action.branch, steps ? action.run.workflow : branch[0] ? buf : "");
+}
+
+static void action_render(const dash_action_page_t *page)
+{
+    bool steps = action.query.job_id != 0;
+    int number = steps ? action.query.steps_page : action.query.jobs_page;
+    int pages = page ? (page->total + DASH_ACTION_BATCH - 1) / DASH_ACTION_BATCH : 0;
+    const char *message = "";
+    if (action.loading) message = dash_tr(S_ACTION_LOADING);
+    else if (!page) message = dash_tr(S_ACTION_UNAVAILABLE);
+    else if (!page->count) message = dash_tr(steps ? S_ACTION_NO_STEPS : S_ACTION_NO_JOBS);
+    set_text(action.message, message);
+    show(action.controls[ACTION_REFRESH], !action.loading);
+    show(action.controls[ACTION_PREV], !action.loading && number > 1);
+    show(action.controls[ACTION_NEXT], number < pages);
+    show(action.counter, pages > 1 && number <= pages);
+    if (pages > 1) {
+        char counter[20];
+        snprintf(counter, sizeof(counter), "%d / %d", number, pages);
+        set_text(action.counter, counter);
+    }
+    int focus = action.loading ? ACTION_BACK : ACTION_REFRESH;
+    int first_failure = -1, restored = -1;
+    for (int i = 0; i < DASH_ACTION_BATCH; ++i) {
+        run_row_t *r = &action.rows[i];
+        bool visible = page && i < page->count;
+        show(r->row, visible);
+        if (!visible) continue;
+        const dash_action_item_t *item = &page->items[i];
+        char duration[16] = "";
+        if (item->duration_s >= 0) dash_fmt_duration(item->duration_s, duration, sizeof(duration));
+        set_text_color(r->icon, run_color(item->state));
+        set_text(r->icon, run_icon(item->state));
+        int name_width = steps ? 139 : 116;
+        lv_point_t size;
+        int line = lv_font_get_line_height(&dash_font_zh12);
+        lv_text_get_size(&size, item->name, &dash_font_zh12, 0, 0, name_width, LV_TEXT_FLAG_NONE);
+        lv_obj_set_width(r->name, name_width);
+        lv_obj_set_height(r->name, size.y > line ? 2 * line : line);
+        set_text(r->name, item->name);
+        lv_obj_set_x(r->right, steps ? 166 : 145);
+        lv_obj_set_width(r->right, steps ? 46 : 54);
+        set_text(r->right, duration);
+        show(r->arrow, !steps);
+        lv_obj_set_clickable(r->row, !steps);
+        if (first_failure < 0 && item->state == DASH_RUN_FAILURE) first_failure = i;
+        if (item->id == action.restore_job) restored = i;
+    }
+    if (page && page->count) {
+        int row = restored >= 0 ? restored : first_failure >= 0 ? first_failure : 0;
+        focus = steps ? ACTION_BACK : ACTION_FIRST_ROW + row;
+    }
+    action_focus(focus);
+}
+
+void dash_ui_action_reply(uint32_t seq, const dash_action_page_t *page)
+{
+    if (!action.panel || !action.loading || seq != action.seq) return;
+    action.loading = false;
+    action.page = page ? *page : (dash_action_page_t){0};
+    action_render(page);
+    action.restore_job = 0;
+}
+
+void dash_ui_set_action_cb(dash_ui_action_cb_t cb)
+{
+    action_request_cb = cb;
+}
+
+static void action_fetch(void)
+{
+    action_header();
+    action.loading = action_request_cb != NULL;
+    action_render(NULL);
+    if (action.loading) action.seq = action_request_cb(&action.query);
+}
+
+static void action_activate(int control)
+{
+    if (control == ACTION_BACK) {
+        if (!action.query.job_id) {
+            action_close();
+            return;
+        }
+        action.restore_job = action.query.job_id;
+        action.query.job_id = 0;
+        action.query.steps_page = 0;
+    } else if (control == ACTION_PREV || control == ACTION_NEXT) {
+        int *page = action.query.job_id ? &action.query.steps_page : &action.query.jobs_page;
+        *page += control == ACTION_NEXT ? 1 : -1;
+    } else if (control >= ACTION_FIRST_ROW && control < ACTION_NEXT) {
+        int index = control - ACTION_FIRST_ROW;
+        if (action.loading || action.query.job_id || index >= action.page.count) return;
+        action.job = action.page.items[index];
+        action.query.job_id = action.job.id;
+        action.query.steps_page = 1;
+    }
+    action_fetch();
+}
+
+static void action_clicked(lv_event_t *event)
+{
+    action_activate((int)(intptr_t)lv_event_get_user_data(event));
+}
+
+static void action_button(int control, int x, int y, int w, int h, const char *icon)
+{
+    lv_obj_t *obj = action_card(action.panel, x, y, w, h);
+    lv_obj_add_event_cb(obj, action_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)control);
+    lv_obj_t *glyph = label(obj, &lv_font_montserrat_16, T_ACCENT, 0, 0);
+    lv_label_set_text(glyph, icon);
+    lv_obj_center(glyph);
+    action.controls[control] = obj;
+}
+
+static void action_build(void)
+{
+    action.panel = box(ui.scr, 0, 0, DASH_UI_W, DASH_UI_H, T_BG);
+    lv_obj_set_clickable(action.panel, true);
+    box(action.panel, 0, 0, DASH_UI_W, 44, T_BAR);
+    action_button(ACTION_BACK, PAD, 4, 34, 36, LV_SYMBOL_LEFT);
+    action_button(ACTION_REFRESH, 196, 4, 34, 36, LV_SYMBOL_REFRESH);
+    action.icon = label(action.panel, &lv_font_montserrat_16, T_ACCENT, 52, 14);
+    action.meta = label_w(action.panel, F.small, T_TEXT, 71, 15, 121, LV_LABEL_LONG_MODE_DOTS);
+    action.title = label_w(action.panel, &dash_font_zh16, T_TEXT, PAD, 48, INNER_W, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_height(action.title, 2 * lv_font_get_line_height(&dash_font_zh16));
+    action.branch = label_w(action.panel, &dash_font_zh12, T_MUTED, PAD, 86, INNER_W, LV_LABEL_LONG_MODE_DOTS);
+    action.message = label_w(action.panel, F.body, T_MUTED, PAD, 174, INNER_W, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_align(action.message, LV_TEXT_ALIGN_CENTER, 0);
+    for (int i = 0; i < DASH_ACTION_BATCH; ++i) {
+        run_row_t *r = &action.rows[i];
+        r->row = action_card(action.panel, PAD, 104 + i * 30, INNER_W, 28);
+        action.controls[ACTION_FIRST_ROW + i] = r->row;
+        lv_obj_add_event_cb(r->row, action_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)(ACTION_FIRST_ROW + i));
+        r->icon = label(r->row, &lv_font_montserrat_12, T_GOOD, 8, 7);
+        r->name = label_w(r->row, &dash_font_zh12, T_TEXT, 27, 0, 116, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_align(r->name, LV_ALIGN_LEFT_MID, 27, 0);
+        r->right = label_w(r->row, &lv_font_montserrat_12, T_MUTED, 145, 7, 54, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_style_text_align(r->right, LV_TEXT_ALIGN_RIGHT, 0);
+        r->arrow = label(r->row, &lv_font_montserrat_12, T_ACCENT, 204, 7);
+        lv_label_set_text(r->arrow, LV_SYMBOL_RIGHT);
+    }
+    action_button(ACTION_PREV, PAD, 287, 40, 30, LV_SYMBOL_LEFT);
+    action_button(ACTION_NEXT, 190, 287, 40, 30, LV_SYMBOL_RIGHT);
+    action.counter = label_w(action.panel, F.small, T_MUTED, 62, 294, 116, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_style_text_align(action.counter, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+static int github_index(const dash_state_t *st, int64_t id)
+{
+    if (id <= 0) return -1;
+    for (int i = 0; i < st->run_count; ++i) {
+        if (st->runs[i].id == id) return i;
+    }
+    return -1;
+}
+
+static void github_focus(int index, bool reveal)
+{
+    ui.gh_selected = index >= 0 ? ui.last.runs[index].id : 0;
+    for (int i = 0; i < DASH_MAX_RUNS; ++i) outline_focus(ui.runs[i].row, i == index);
+    if (reveal && index >= 0) lv_obj_scroll_to_view(ui.runs[index].row, LV_ANIM_OFF);
+}
+
+static void github_open(int index)
+{
+    if (ui.page != 1 || action.panel || dash_ota_ui_active() || !ui.last.have_hub ||
+        index < 0 || index >= ui.last.run_count) return;
+    const dash_run_t *run = &ui.last.runs[index];
+    if (run->id <= 0 || run->attempt <= 0) return;
+    github_focus(index, true);
+    action.run = *run;
+    action.query = (dash_action_query_t){.run_id = run->id, .attempt = run->attempt, .jobs_page = 1};
+    action.restore_job = 0;
+    action_build();
+    action_fetch();
+}
+
+static void github_clicked(lv_event_t *e)
+{
+    github_open((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void github_turn(int steps)
+{
+    if (action.panel) {
+        int focus = action.focus;
+        int dir = steps > 0 ? 1 : -1;
+        for (int i = focus + dir; steps && i >= 0 && i < ACTION_CONTROL_COUNT; i += dir) {
+            bool step_row = action.query.job_id && i >= ACTION_FIRST_ROW && i < ACTION_NEXT;
+            if (!step_row && !lv_obj_is_hidden(action.controls[i])) {
+                steps -= dir;
+                focus = i;
+            }
+        }
+        action_focus(focus);
+    } else if (ui.last.have_hub && ui.last.run_count) {
+        int index = github_index(&ui.last, ui.gh_selected);
+        int64_t target = (index < 0 ? 0 : index) + (int64_t)steps;
+        if (target < 0) target = 0;
+        if (target >= ui.last.run_count) target = ui.last.run_count - 1;
+        github_focus((int)target, true);
+    }
+}
+
 static void build_github(lv_obj_t *t)
 {
     lv_label_set_text(label(t, F.title, T_TEXT, PAD, 2), dash_tr(S_GH_TITLE));
     ui.gh_repo = label_w(t, F.small, T_MUTED, PAD, 28, INNER_W, LV_LABEL_LONG_MODE_DOTS);
 
-    ui.gh_block = card(t, PAD, 46, INNER_W, 44, T_GREY);
-    lv_obj_set_flex_flow(ui.gh_block, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(ui.gh_block, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(ui.gh_block, 10, 0);
-    ui.gh_icon = lv_label_create(ui.gh_block);
-    lv_obj_set_style_text_font(ui.gh_icon, F.icon, 0);
-    lv_obj_set_style_text_color(ui.gh_icon, hex(T_BG), 0);
-    ui.gh_state = lv_label_create(ui.gh_block);
-    lv_obj_set_style_text_font(ui.gh_state, F.title, 0);
-    lv_obj_set_style_text_color(ui.gh_state, hex(T_BG), 0);
+    ui.gh_block = action_card(t, PAD, 46, INNER_W, 66);
+    lv_obj_add_event_cb(ui.gh_block, github_clicked, LV_EVENT_CLICKED, NULL);
+    ui.gh_icon = label(ui.gh_block, F.icon, T_GOOD, 10, 4);
+    ui.gh_state = label(ui.gh_block, F.body, T_GOOD, 38, 6);
+    ui.gh_arrow = label(ui.gh_block, &lv_font_montserrat_16, T_ACCENT, 198, 8);
+    lv_label_set_text(ui.gh_arrow, LV_SYMBOL_RIGHT);
 
-    ui.gh_wf = label_w(t, F.body, T_TEXT, PAD, 96, INNER_W, LV_LABEL_LONG_MODE_DOTS);
-    ui.gh_meta = label_w(t, F.small, T_MUTED, PAD, 118, INNER_W, LV_LABEL_LONG_MODE_DOTS);
+    ui.gh_wf = label_w(ui.gh_block, &dash_font_zh16, T_TEXT, 10, 26, INNER_W - 20, LV_LABEL_LONG_MODE_DOTS);
+    ui.gh_meta = label_w(ui.gh_block, F.small, T_MUTED, 10, 48, INNER_W - 20, LV_LABEL_LONG_MODE_DOTS);
 
-    ui.heat_card = card(t, PAD, 138, INNER_W, 78, T_CARD);
+    ui.heat_card = card(t, PAD, 120, INNER_W, 76, T_CARD);
     if (dash_pix_create(&ui.heat, ui.heat_card, HEAT_COLS * HEAT_CELL, 7 * HEAT_CELL)) {
         lv_obj_set_pos(ui.heat.img, 8, 4);
     }
@@ -807,15 +1094,23 @@ static void build_github(lv_obj_t *t)
     ui.heat_none = label_w(ui.heat_card, F.small, T_MUTED, 8, 30, 150, LV_LABEL_LONG_MODE_CLIP);
     lv_label_set_text(ui.heat_none, dash_tr(S_HEAT_NONE));
 
-    for (int i = 0; i < 2; ++i) {
+    ui.gh_list = box(t, PAD, 202, INNER_W, TILE_H - 202, T_BG);
+    lv_obj_set_scrollable(ui.gh_list, true);
+    lv_obj_set_scroll_dir(ui.gh_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(ui.gh_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(ui.gh_list, 2, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(ui.gh_list, hex(T_MUTED), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(ui.gh_list, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    for (int i = 0; i < DASH_MAX_RUNS; ++i) {
         run_row_t *r = &ui.runs[i];
-        r->row = card(t, PAD, 222 + i * 29, INNER_W, 25, T_CARD);
-        lv_obj_set_style_radius(r->row, 6, 0);
-        r->dot = dot(r->row, 8, 9, 8);
-        r->name = label_w(r->row, &lv_font_montserrat_12, T_TEXT, 22, 5, 108, LV_LABEL_LONG_MODE_DOTS);
-        r->right = label_w(r->row, &lv_font_montserrat_12, T_MUTED, 132, 5, INNER_W - 140,
-                           LV_LABEL_LONG_MODE_CLIP);
+        r->row = action_card(ui.gh_list, 0, i * 30, INNER_W - 6, 27);
+        lv_obj_add_event_cb(r->row, github_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        r->icon = label(r->row, &lv_font_montserrat_12, T_GOOD, 8, 6);
+        r->name = label_w(r->row, &dash_font_zh12, T_TEXT, 27, 6, 129, LV_LABEL_LONG_MODE_DOTS);
+        r->right = label_w(r->row, &lv_font_montserrat_12, T_MUTED, 157, 6, 37, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_style_text_align(r->right, LV_TEXT_ALIGN_RIGHT, 0);
+        r->arrow = label(r->row, &lv_font_montserrat_12, T_ACCENT, 201, 6);
+        lv_label_set_text(r->arrow, LV_SYMBOL_RIGHT);
     }
     ui.gh_empty = label_w(t, F.body, T_MUTED, PAD, 60, INNER_W, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_style_text_align(ui.gh_empty, LV_TEXT_ALIGN_CENTER, 0);
@@ -896,16 +1191,18 @@ static void build_pomodoro(lv_obj_t *t)
     ui.pomo_time_drawn[0] = '\0';
     ui.pomo_phase_lbl = label_w(t, F.small, T_MUTED, 40, 146, 160, LV_LABEL_LONG_MODE_CLIP);
     lv_obj_set_style_text_align(ui.pomo_phase_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    ui.pomo_duration = label_w(t, F.small, T_MUTED, PAD, 190, INNER_W, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_style_text_align(ui.pomo_duration, LV_TEXT_ALIGN_CENTER, 0);
 
     for (int i = 0; i < 2; ++i) {
-        lv_obj_t *b = card(t, 24 + i * 102, 200, 90, 34, i == 0 ? T_ACCENT : T_CARD);
+        lv_obj_t *b = card(t, 24 + i * 102, 212, 90, 34, i == 0 ? T_ACCENT : T_CARD);
         lv_obj_set_clickable(b, true);
         lv_obj_add_event_cb(b, pomo_btn, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         ui.pomo_btn_lbl[i] = label(b, F.body, i == 0 ? T_BG : T_TEXT, 0, 0);
         lv_obj_center(ui.pomo_btn_lbl[i]);
     }
     lv_label_set_text(ui.pomo_btn_lbl[1], dash_tr(S_POMO_RESET));
-    ui.pomo_stats = label_w(t, F.small, T_MUTED, PAD, 248, INNER_W, LV_LABEL_LONG_MODE_CLIP);
+    ui.pomo_stats = label_w(t, F.small, T_MUTED, PAD, 260, INNER_W, LV_LABEL_LONG_MODE_CLIP);
     lv_obj_set_style_text_align(ui.pomo_stats, LV_TEXT_ALIGN_CENTER, 0);
 }
 
@@ -1042,6 +1339,7 @@ static void build_mihome(lv_obj_t *t)
 
 static void destroy_pix(void)
 {
+    action_close();
     dash_health_ui_destroy();
     dash_calendar_ui_destroy();
     dash_season_destroy();
@@ -1109,6 +1407,7 @@ static void build(void)
 
 static void rebuild(void)
 {
+    knob_rebuild();
     lv_obj_t *old = ui.scr;
     if (ui.popup_timer) {
         lv_timer_delete(ui.popup_timer);
@@ -1268,7 +1567,7 @@ static void update_home(const dash_state_t *st, int64_t now, dash_freshness_t fr
     } else if (mood != DASH_CAT_MOOD_HAPPY && act != DASH_ACT_SLEEP) {
         set_text(ui.bubble_text, mood_line);
     } else if (pomo.phase == DASH_POMO_FOCUS) {
-        set_text(ui.bubble_text, dash_tr(S_REACT_POMO_START));
+        set_text(ui.bubble_text, pomo_focus_line());
     } else if (pomo.phase == DASH_POMO_BREAK) {
         set_text(ui.bubble_text, dash_tr(S_POMO_BREAK));
     } else if (act == DASH_ACT_FREE) {
@@ -1301,16 +1600,18 @@ static void update_home(const dash_state_t *st, int64_t now, dash_freshness_t fr
     snprintf(buf, sizeof(buf), "%d", st->muse_count);
     set_text(ui.chip_val[2], buf);
     set_text_color(ui.chip_icon[2], st->muse_count ? T_ACCENT : T_GREY);
-    if (pomo.phase == DASH_POMO_IDLE) {
-        snprintf(buf, sizeof(buf), "%d", pomo.count);
+    if (st->have_mi && st->mi_count) {
+        int online = 0;
+        for (int i = 0; i < st->mi_count; ++i) {
+            online += st->mi_ok && st->mi[i].online;
+        }
+        snprintf(buf, sizeof(buf), "%d/%d", online, st->mi_count);
+        set_text(ui.chip_val[3], buf);
+        set_text_color(ui.chip_icon[3], !st->mi_ok ? T_GREY : online == st->mi_count ? T_GOOD : T_BAD);
     } else {
-        uint32_t s = pomo_remaining() / 1000;
-        snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+        set_text(ui.chip_val[3], "--");
+        set_text_color(ui.chip_icon[3], T_GREY);
     }
-    set_text(ui.chip_val[3], buf);
-    set_text_color(ui.chip_icon[3], pomo.phase == DASH_POMO_FOCUS   ? T_ACCENT
-                                    : pomo.phase == DASH_POMO_BREAK ? T_GOOD
-                                                                    : T_GREY);
 }
 
 static void draw_heat(const dash_state_t *st)
@@ -1337,20 +1638,17 @@ static void update_github(const dash_state_t *st, int64_t now)
 {
     char buf[96], dur[16], ago[24];
     bool has = st->have_hub && st->run_count > 0;
-    if (has) {
-        snprintf(buf, sizeof(buf), "%s  " LV_SYMBOL_SHUFFLE " %s", st->repo[0] ? st->repo : "ISBF-Lab/ISBFweb",
-                 st->runs[0].branch);
-        set_text(ui.gh_repo, buf);
-    } else {
-        set_text(ui.gh_repo, st->repo[0] ? st->repo : "ISBF-Lab/ISBFweb");
-    }
+    set_text(ui.gh_repo, st->repo[0] ? st->repo : "ISBF-Lab/ISBFweb");
     show(ui.gh_block, has);
-    show(ui.gh_wf, has);
-    show(ui.gh_meta, has);
+    show(ui.gh_list, has);
     show(ui.gh_empty, !has);
     if (has) {
         const dash_run_t *r0 = &st->runs[0];
-        set_color(ui.gh_block, run_color(r0->state));
+        bool available = r0->id > 0 && r0->attempt > 0;
+        lv_obj_set_clickable(ui.gh_block, available);
+        show(ui.gh_arrow, available);
+        set_text_color(ui.gh_icon, run_color(r0->state));
+        set_text_color(ui.gh_state, run_color(r0->state));
         set_text(ui.gh_icon, run_icon(r0->state));
         set_text(ui.gh_state, run_text(r0->state));
         set_text(ui.gh_wf, r0->workflow);
@@ -1362,20 +1660,34 @@ static void update_github(const dash_state_t *st, int64_t now)
     } else {
         set_text(ui.gh_empty, st->have_hub ? dash_tr(S_NO_RUNS) : dash_tr(S_NO_DATA));
     }
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < DASH_MAX_RUNS; ++i) {
         run_row_t *row = &ui.runs[i];
-        int idx = i + 1;
-        if (!has || idx >= st->run_count) {
+        if (!has || i >= st->run_count) {
             show(row->row, false);
             continue;
         }
-        const dash_run_t *r = &st->runs[idx];
+        const dash_run_t *r = &st->runs[i];
+        bool available = r->id > 0 && r->attempt > 0;
         show(row->row, true);
-        set_color(row->dot, run_color(r->state));
+        lv_obj_set_clickable(row->row, available);
+        show(row->arrow, available);
+        set_text_color(row->icon, run_color(r->state));
+        set_text(row->icon, run_icon(r->state));
         set_text(row->name, r->workflow);
-        dash_fmt_duration(r->duration_s, dur, sizeof(dur));
-        snprintf(buf, sizeof(buf), "#%d %s", r->run_number, dur);
+        snprintf(buf, sizeof(buf), "#%d", r->run_number);
         set_text(row->right, buf);
+    }
+    int focus = github_index(st, ui.gh_selected);
+    github_focus(has ? (focus < 0 ? 0 : focus) : -1, false);
+    if (action.panel) {
+        if (!st->have_hub) action_close();
+        else {
+            int i = github_index(st, action.run.id);
+            if (i >= 0 && st->runs[i].attempt == action.run.attempt) {
+                action.run = st->runs[i];
+                action_header();
+            }
+        }
     }
 
     if (ui.heat.img) {
@@ -1483,7 +1795,7 @@ static void update_pomodoro(void)
     char buf[64];
     uint32_t s = pomo_remaining() / 1000;
     if (pomo.phase == DASH_POMO_IDLE) {
-        s = FOCUS_MS / 1000;
+        s = (uint32_t)pomo.focus_minutes * 60;
     }
     snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
     if (ui.pomo_time.px && strcmp(buf, ui.pomo_time_drawn) != 0) {
@@ -1509,6 +1821,9 @@ static void update_pomodoro(void)
                                                                           : S_POMO_PAUSE));
     snprintf(buf, sizeof(buf), dash_tr(S_POMO_TODAY_FMT), pomo.count, pomo.minutes);
     set_text(ui.pomo_stats, buf);
+    snprintf(buf, sizeof(buf), dash_tr(pomo.phase == DASH_POMO_IDLE ? S_POMO_DURATION_FMT
+                                                                   : S_POMO_NEXT_FMT), pomo.focus_minutes);
+    set_text(ui.pomo_duration, buf);
 
     int look = ph == DASH_POMO_FOCUS   ? DASH_LOOK_FOCUS
                : ph == DASH_POMO_BREAK ? DASH_LOOK_YAWN
@@ -1926,6 +2241,8 @@ static void popup_open(uint32_t color, const char *icon, const char *title, cons
 
 void dash_ui_create(lv_display_t *disp, dash_lang_t lang)
 {
+    action_close();
+    knob_rebuild();
     dash_ui_lang_cb_t lcb = ui.lang_cb;
     dash_ui_pomo_cb_t pcb = ui.pomo_cb;
     dash_ui_mi_cb_t mcb = ui.mi_cb;
@@ -1967,6 +2284,7 @@ void dash_ui_update(const dash_state_t *st, int64_t now)
     if (ui.debug_night == 1) sky_now += (23 - ((sky_now + DASH_TZ_OFFSET_S)/3600)%24)*3600;
     dash_ota_ui_update(&st->ota);
     if (dash_ota_ui_active()) {
+        action_close();
         ui.wake_until = tick_now() + 10000;
         dash_flight_ui_interrupt();
     }
@@ -2070,6 +2388,10 @@ void dash_ui_set_page(int page, bool anim)
     if (page < 0 || page >= DASH_UI_PAGES) {
         return;
     }
+    if (ui.page != page) {
+        action_close();
+        knob_page_leave();
+    }
     ui.page = page;
     dash_flight_ui_page_changed();
     dash_calendar_ui_page_changed();
@@ -2082,7 +2404,7 @@ void dash_ui_step_page(int delta)
     if (!ui.tv || delta == 0) {
         return;
     }
-    int page = ((ui.page + delta) % DASH_UI_PAGES + DASH_UI_PAGES) % DASH_UI_PAGES;
+    int page = ((ui.page + delta % DASH_UI_PAGES) % DASH_UI_PAGES + DASH_UI_PAGES) % DASH_UI_PAGES;
     /* a wrap (first <-> last) jumps instead of sliding past every page in between */
     bool wrap = (delta > 0 && page < ui.page) || (delta < 0 && page > ui.page);
     dash_ui_set_page(page, (delta == 1 || delta == -1) && !wrap);
@@ -2276,6 +2598,8 @@ static struct {
     int bri_dev, bri;
     bool bri_active;
     uint32_t bri_last; /* lv tick of the last turn */
+    int pet_dir, pet_runs;
+    uint32_t pet_first, pet_last;
 } knob = {.bri_dev = -1};
 
 static void toast_hide(lv_timer_t *t)
@@ -2292,6 +2616,8 @@ static void toast(const char *text)
 {
     if (!knob.toast) {
         knob.toast = lv_label_create(lv_layer_top());
+        lv_obj_set_style_max_width(knob.toast, INNER_W, 0);
+        lv_label_set_long_mode(knob.toast, LV_LABEL_LONG_MODE_WRAP);
         lv_obj_set_style_text_font(knob.toast, F.body, 0);
         lv_obj_set_style_text_color(knob.toast, hex(T_TEXT), 0);
         lv_obj_set_style_bg_color(knob.toast, hex(T_CARD), 0);
@@ -2373,8 +2699,8 @@ static void knob_bri_turn(int steps)
         knob.bri_dev = i;
         knob.bri = d->on && d->bri > 0 ? d->bri : 0; /* from off: the first step lights it dimly */
     }
-    knob.bri += steps * 5;
-    knob.bri = knob.bri < 1 ? 1 : knob.bri > 100 ? 100 : knob.bri;
+    int64_t value = knob.bri + (int64_t)steps * 5;
+    knob.bri = value < 1 ? 1 : value > 100 ? 100 : (int)value;
     knob.bri_active = true;
     knob.bri_last = tick_now();
     if (!knob.bri_timer) {
@@ -2385,23 +2711,133 @@ static void knob_bri_turn(int steps)
     toast(buf);
 }
 
+static void knob_page_leave(void)
+{
+    knob_bri_commit();
+    knob.pet_runs = 0;
+}
+
+static void knob_rebuild(void)
+{
+    knob_page_leave();
+    if (knob.toast_timer) lv_timer_delete(knob.toast_timer);
+    knob.toast_timer = NULL;
+    if (knob.toast) lv_obj_delete(knob.toast);
+    knob.toast = NULL;
+}
+
+static void pomo_duration_save(lv_timer_t *t)
+{
+    (void)t;
+    pomo.save_timer = NULL;
+    if (pomo.duration_cb) pomo.duration_cb(pomo.focus_minutes);
+}
+
+static void pomo_duration_turn(int steps)
+{
+    int64_t value = pomo.focus_minutes + (int64_t)steps * 5;
+    int minutes = value < 15 ? 15 : value > 60 ? 60 : (int)value;
+    if (minutes == pomo.focus_minutes) return;
+    pomo.focus_minutes = minutes;
+    if (pomo.save_timer) lv_timer_reset(pomo.save_timer);
+    else {
+        pomo.save_timer = lv_timer_create(pomo_duration_save, 1000, NULL);
+        lv_timer_set_repeat_count(pomo.save_timer, 1);
+    }
+}
+
+static void mail_turn(int steps)
+{
+    lv_obj_update_layout(ui.mail_list);
+    lv_point_t end;
+    lv_obj_get_scroll_end(ui.mail_list, &end);
+    int32_t max = lv_obj_get_scroll_y(ui.mail_list) + lv_obj_get_scroll_bottom(ui.mail_list);
+    if (max < 0) max = 0;
+    int64_t target = end.y + (int64_t)steps * 32;
+    lv_obj_scroll_to_y(ui.mail_list, target < 0 ? 0 : target > max ? max : (int32_t)target, LV_ANIM_ON);
+}
+
+static void pet_turn(int steps, uint32_t at_ms)
+{
+    if (!steps) return;
+    if (ui.popup || dash_ota_ui_active() || dash_flight_ui_scene_active() ||
+        dash_cat_reacting() != DASH_CAT_REACT_NONE || tick_now() - at_ms > 1200) {
+        knob.pet_runs = 0;
+        return;
+    }
+    int dir = steps > 0 ? 1 : -1;
+    if (!knob.pet_runs || at_ms - knob.pet_first > 1200 || at_ms - knob.pet_last > 350) {
+        knob.pet_runs = 1;
+        knob.pet_first = at_ms;
+    } else if (dir != knob.pet_dir) {
+        ++knob.pet_runs;
+    }
+    knob.pet_dir = dir;
+    knob.pet_last = at_ms;
+    if (knob.pet_runs >= 4) {
+        knob.pet_runs = 0;
+        if (dash_cat_pet()) bubble_say(dash_tr(S_REACT_PET), 4000);
+    }
+}
+
 void dash_ui_knob(dash_knob_ev_t ev, int steps)
+{
+    dash_ui_knob_at(ev, steps, tick_now());
+}
+
+void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
 {
     char buf[64];
     ui.wake_until = tick_now() + 30000; /* any knob use lights a dimmed night screen */
+    if (ev != DASH_KNOB_TURN) knob.pet_runs = 0;
+    if (dash_ota_ui_active()) {
+        knob.pet_runs = 0;
+        return;
+    }
     switch (ev) {
     case DASH_KNOB_TURN:
-        knob_bri_commit();
-        dash_ui_step_page(steps);
+        if (!steps) break;
+        switch (ui.page) {
+        case 0: pet_turn(steps, at_ms); break;
+        case 1: github_turn(steps); break;
+        case 3: pomo_duration_turn(steps); break;
+        case 4: mail_turn(steps); break;
+        case 5: knob_bri_turn(steps); break;
+        case 6: dash_flight_ui_step(steps); break;
+        case 8: dash_health_ui_step(steps); break;
+        default: dash_ui_step_page(steps); break;
+        }
         break;
     case DASH_KNOB_HOLD_TURN:
-        knob_bri_turn(steps);
+        knob_bri_commit();
+        dash_ui_step_page(steps);
         break;
     case DASH_KNOB_RELEASE:
         knob_bri_commit();
         break;
     case DASH_KNOB_CLICK: {
         knob_bri_commit();
+        if (ui.page == 0) {
+            if (!ui.popup && !dash_flight_ui_scene_active() && dash_cat_reacting() == DASH_CAT_REACT_NONE) {
+                dash_cat_react(DASH_CAT_REACT_TOUCH);
+                touch_report();
+            }
+            break;
+        }
+        if (ui.page == 1) {
+            if (action.panel) action_activate(action.focus);
+            else github_open(github_index(&ui.last, ui.gh_selected));
+            break;
+        }
+        if (ui.page == 3) {
+            dash_ui_pomo_toggle();
+            break;
+        }
+        if (ui.page != 5) {
+            toast(dash_tr(ui.page == 4 ? S_KNOB_MAIL_HINT : ui.page == 6 ? S_KNOB_FLIGHT_HINT
+                          : ui.page == 8 ? S_KNOB_HEALTH_HINT : S_KNOB_PAGE_HINT));
+            break;
+        }
         int i = knob_lamp();
         if (i < 0) {
             toast(dash_tr(S_KNOB_NO_LAMP));
@@ -2440,6 +2876,16 @@ void dash_ui_pomo_restore(int count, int minutes, int yday)
     pomo.count = count;
     pomo.minutes = minutes;
     pomo.yday = yday;
+}
+
+void dash_ui_set_pomo_duration_cb(dash_ui_pomo_duration_cb_t cb)
+{
+    pomo.duration_cb = cb;
+}
+
+void dash_ui_pomo_duration_restore(int minutes)
+{
+    pomo.focus_minutes = minutes >= 15 && minutes <= 60 && minutes % 5 == 0 ? minutes : 25;
 }
 
 void dash_ui_get_status(bool *night, uint8_t *pomo_phase, uint8_t *pomo_pct)

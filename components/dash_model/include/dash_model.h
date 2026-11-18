@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-#define DASH_MAX_RUNS 4
+#define DASH_MAX_RUNS 5
 #define DASH_MAX_SERVERS 3
 #define DASH_MAX_SERVICES 4
 #define DASH_MAX_EVENTS 8
@@ -49,11 +49,14 @@ typedef enum {
     DASH_RUN_SKIPPED,
 } dash_run_state_t;
 
+dash_run_state_t dash_run_state(const char *status, const char *conclusion);
+
 typedef struct {
     int64_t id;
     char workflow[48];
     char branch[40];
     int run_number;
+    int attempt;
     dash_run_state_t state;
     int duration_s;
     int64_t updated_at;

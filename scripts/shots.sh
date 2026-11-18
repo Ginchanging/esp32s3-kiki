@@ -46,14 +46,21 @@ shot "mood_night" --fixture "$FX/1_ok.json" --act 0 --night --ms 300
 shot "mood_offline" --fixture "$FX/6_offline.json" --ms 300
 shot "mood_boot" --fixture "$FX/7_boot.json" --ms 300
 shot "det_gh_failed" --fixture "$FX/2_gh_failed.json" --page 1
+shot "det_gh_jobs" --fixture "$FX/2_gh_failed.json" --page 1 --swipe 'tap:200,99,1'
+shot "det_gh_steps" --fixture "$FX/2_gh_failed.json" --page 1 --swipe 'tap:200,99,1;tap:182,148,1'
 shot "det_srv_down" --fixture "$FX/4_server_down.json" --page 2
 shot "det_mail" --fixture "$FX/8_muse_sensor.json" --page 4
 shot "det_mi_done" --fixture "$FX/1_ok.json" --page 5 --mi-done
 shot "det_mi_none" --fixture "$FX/2_gh_failed.json" --page 5 --lang en
 shot "det_diary_zh" --fixture "$FX/1_ok.json" --page 4 --diary day
 shot "det_weekly_en" --fixture "$FX/1_ok.json" --page 4 --diary week --lang en
-shot "det_knob_bri" --fixture "$FX/1_ok.json" --page 5 --knob hold:3
+shot "det_knob_bri" --fixture "$FX/1_ok.json" --page 5 --knob turn:3
 shot "det_knob_pomo" --fixture "$FX/1_ok.json" --page 3 --knob long --lang en
+shot "det_knob_duration" --fixture "$FX/1_ok.json" --page 3 --knob turn:2
+shot "det_knob_next" --fixture "$FX/1_ok.json" --page 3 --knob 'click;turn:2' --lang en
+shot "det_knob_mail" --fixture "$FX/8_muse_sensor.json" --page 4 --knob turn:5
+shot "det_knob_flight" --fixture "$FX/10_flights_multi.json" --page 6 --knob turn:1
+shot "det_knob_health" --fixture "$FX/20_health.json" --page 8 --knob turn:1
 shot "flight_day" --fixture "$FX/9_flight.json" --flyover --ms 2400
 shot "flight_night" --fixture "$FX/9_flight.json" --flyover --night --ms 2400
 shot "flight_notice" --fixture "$FX/9_flight.json" --flyover --ms 6500
@@ -73,6 +80,7 @@ shot "health_empty" --fixture "$FX/22_health_empty.json" --page 8
 shot "health_disabled" --fixture "$FX/1_ok.json" --page 8 --lang en
 python3 "$ROOT/scripts/holiday_shots.py" "$SIM" "$OUT"
 python3 "$ROOT/scripts/idle_shots.py" "$SIM" "$OUT"
+python3 "$ROOT/scripts/knob_shots.py" "$SIM" "$OUT"
 
 python3 - "$OUT" <<'PY'
 import sys, pathlib

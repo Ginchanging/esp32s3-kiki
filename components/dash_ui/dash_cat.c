@@ -92,6 +92,10 @@ static const anim_t react_anim[DASH_CAT_REACT_COUNT] = {
     [DASH_CAT_REACT_POMO_DONE] = ANIM(false, false, {DASH_LOOK_CI_PASS, 160}, {DASH_LOOK_CI_PASS_2, 160},
                                       {DASH_LOOK_CI_PASS, 160}, {DASH_LOOK_CI_PASS_2, 160},
                                       {DASH_LOOK_HAPPY, 1500}),
+    [DASH_CAT_REACT_PET] = ANIM(false, false, {DASH_LOOK_PET_LEAN, 300}, {DASH_LOOK_PET_SIDE, 300},
+                                 {DASH_LOOK_PET_BELLY, 600}, {DASH_LOOK_PET_RUB, 400},
+                                 {DASH_LOOK_PET_BELLY, 400}, {DASH_LOOK_PET_REST, 1200},
+                                 {DASH_LOOK_PET_SIDE, 400}, {DASH_LOOK_PET_LEAN, 400}),
 };
 
 static struct {
@@ -105,6 +109,9 @@ static struct {
     uint32_t frame_ms; /* time spent in the current frame */
     dash_cat_react_t react;
     uint32_t react_ms;
+    uint32_t pet_ready_at;
+    uint32_t pet_started_at;
+    bool pet_cooling;
     uint32_t idle_phase_tick;
     bool idle_synced;
     int drawn_look, drawn_mood;
@@ -209,32 +216,44 @@ static void place(int dx, int dy)
     lv_obj_set_pos(cat.pix.img, cat.x + dx, cat.y + dy);
 }
 
+static void finish_reaction(void)
+{
+    if (cat.react == DASH_CAT_REACT_PET) {
+        cat.pet_ready_at = lv_tick_get() + 2000;
+        cat.pet_cooling = true;
+    }
+    cat.react = DASH_CAT_REACT_NONE;
+    cat.anim = NULL;
+    start_anim(routine_anim());
+    if (free_time()) select_phase(lv_tick_get() - cat.idle_phase_tick);
+}
+
 static void tick(lv_timer_t *t)
 {
+    if (cat.pet_cooling && (int32_t)(lv_tick_get() - cat.pet_ready_at) >= 0) cat.pet_cooling = false;
     if (!cat.anim) {
         start_anim(cat.react ? &react_anim[cat.react] : routine_anim());
         if (cat.react) select_phase(cat.react_ms);
     }
-    if (free_time()) select_phase(lv_tick_get()-cat.idle_phase_tick);
-    else cat.frame_ms += TICK_MS;
-    if (cat.react) {
-        cat.react_ms += TICK_MS;
-    }
-    const frame_t *f = &cat.anim->f[cat.frame];
-    if (cat.frame_ms >= f->ms) {
-        cat.frame_ms = 0;
-        if (++cat.frame >= cat.anim->n) {
-            if (cat.anim->loop) {
-                cat.frame = 0;
-            } else { /* reaction finished: back to the routine */
-                cat.react = DASH_CAT_REACT_NONE;
-                cat.anim = NULL;
-                start_anim(routine_anim());
-                if (free_time()) select_phase(lv_tick_get()-cat.idle_phase_tick);
+    if (cat.react == DASH_CAT_REACT_PET) {
+        /* Panel refreshes may delay timer callbacks: this user gesture still lasts 4 s. */
+        cat.react_ms = lv_tick_get() - cat.pet_started_at;
+        if (cat.react_ms >= 4000) finish_reaction();
+        else select_phase(cat.react_ms);
+    } else {
+        if (free_time()) select_phase(lv_tick_get()-cat.idle_phase_tick);
+        else cat.frame_ms += TICK_MS;
+        if (cat.react) cat.react_ms += TICK_MS;
+        const frame_t *f = &cat.anim->f[cat.frame];
+        if (cat.frame_ms >= f->ms) {
+            cat.frame_ms = 0;
+            if (++cat.frame >= cat.anim->n) {
+                if (cat.anim->loop) cat.frame = 0;
+                else finish_reaction();
             }
         }
-        f = &cat.anim->f[cat.frame];
     }
+    const frame_t *f = &cat.anim->f[cat.frame];
     int look = cat.forced >= 0 ? cat.forced : f->look;
     int mood = cat.react || !cat.anim->mood_ok || cat.forced >= 0 ? DASH_CAT_MOOD_HAPPY : cat.ctx.mood;
     if (look != cat.drawn_look || mood != cat.drawn_mood) {
@@ -310,10 +329,24 @@ void dash_cat_react(dash_cat_react_t r)
     if (r <= DASH_CAT_REACT_NONE || r >= DASH_CAT_REACT_COUNT) {
         return;
     }
+    if (r == DASH_CAT_REACT_PET && (cat.react || cat.forced >= 0 ||
+        (cat.pet_cooling && (int32_t)(lv_tick_get() - cat.pet_ready_at) < 0))) return;
+    if (cat.react == DASH_CAT_REACT_PET) {
+        cat.pet_ready_at = lv_tick_get() + 2000;
+        cat.pet_cooling = true;
+    }
     cat.react = r;
+    if (r == DASH_CAT_REACT_PET) cat.pet_started_at = lv_tick_get();
     cat.react_ms = 0;
     cat.anim = NULL;
     start_anim(&react_anim[r]);
+}
+
+bool dash_cat_pet(void)
+{
+    if (cat.react) return false;
+    dash_cat_react(DASH_CAT_REACT_PET);
+    return cat.react == DASH_CAT_REACT_PET;
 }
 
 dash_cat_react_t dash_cat_reacting(void)

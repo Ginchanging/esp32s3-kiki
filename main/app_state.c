@@ -17,6 +17,8 @@ static volatile bool dirty = true;
 static volatile bool lang_pending;
 static volatile dash_lang_t lang_requested;
 static volatile bool demo;
+static const char *demo_fixture;
+static size_t demo_fixture_len;
 static volatile bool token_changed, bemfa_changed, led_changed;
 static struct {
     int32_t day;
@@ -25,8 +27,15 @@ static struct {
     bool pending;
 } calendar_query;
 
+static struct {
+    dash_action_query_t query;
+    app_action_reply_t reply;
+    bool pending, replied;
+} action_request;
+
 typedef struct {
     int16_t ev, steps;
+    uint32_t at_ms;
 } knob_msg_t;
 static QueueHandle_t knob_q; /* two producers (knob task, serial command), one consumer (UI) */
 
@@ -39,13 +48,14 @@ void app_state_init(void)
 
 void app_knob_push(int ev, int steps)
 {
-    knob_msg_t m = {.ev = (int16_t)ev, .steps = (int16_t)steps};
+    knob_msg_t m = {.ev = (int16_t)ev, .steps = (int16_t)steps,
+                    .at_ms = (uint32_t)(esp_timer_get_time() / 1000)};
     if (knob_q) {
         xQueueSend(knob_q, &m, 0); /* full: drop */
     }
 }
 
-bool app_knob_take(int *ev, int *steps)
+bool app_knob_take(int *ev, int *steps, uint32_t *at_ms)
 {
     knob_msg_t m;
     if (!knob_q || xQueueReceive(knob_q, &m, 0) != pdTRUE) {
@@ -53,6 +63,7 @@ bool app_knob_take(int *ev, int *steps)
     }
     *ev = m.ev;
     *steps = m.steps;
+    *at_ms = m.at_ms;
     return true;
 }
 
@@ -93,6 +104,58 @@ bool app_take_calendar_request(int32_t *day, uint16_t *offset, uint32_t *seq)
 }
 
 bool app_calendar_current_locked(uint32_t seq) { return seq == calendar_query.seq; }
+
+uint32_t app_request_action(const dash_action_query_t *query)
+{
+    app_lock();
+    uint32_t seq = ++action_request.reply.seq;
+    action_request.query = query ? *query : (dash_action_query_t){0};
+    action_request.pending = query != NULL;
+    action_request.replied = false;
+    app_unlock(false);
+    return seq;
+}
+
+bool app_take_action_request(dash_action_query_t *query, uint32_t *seq)
+{
+    app_lock();
+    bool pending = action_request.pending;
+    if (pending) {
+        *seq = action_request.reply.seq;
+        *query = action_request.query;
+        action_request.pending = false;
+    }
+    app_unlock(false);
+    return pending;
+}
+
+void app_finish_action_request(uint32_t seq, const char *json, size_t len)
+{
+    app_lock();
+    bool current = seq == action_request.reply.seq;
+    if (current) {
+        if (demo) {
+            json = demo_fixture;
+            len = demo_fixture_len;
+        }
+        action_request.reply.ok = json && dash_actions_parse(&action_request.reply.page,
+                                                            &action_request.query, json, len);
+        action_request.replied = true;
+    }
+    app_unlock(current);
+}
+
+bool app_take_action_reply(app_action_reply_t *reply)
+{
+    app_lock();
+    bool replied = action_request.replied;
+    if (replied) {
+        *reply = action_request.reply;
+        action_request.replied = false;
+    }
+    app_unlock(false);
+    return replied;
+}
 
 bool app_take_dirty(void)
 {
@@ -197,6 +260,8 @@ bool app_demo_load(const char *name)
                 st->servers[i].reported_at = now - (st->servers[i].online ? 5 : 420);
             }
         }
+        demo_fixture = start;
+        demo_fixture_len = (size_t)(end - start);
         demo = true;
     }
     app_unlock(ok);
@@ -205,8 +270,10 @@ bool app_demo_load(const char *name)
 
 void app_demo_off(void)
 {
-    demo = false;
     dash_state_t *st = app_lock();
+    demo = false;
+    demo_fixture = NULL;
+    demo_fixture_len = 0;
     st->have_hub = false;
     st->run_count = st->server_count = st->event_count = st->mi_count = 0;
     st->have_mi = false;

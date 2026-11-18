@@ -1,5 +1,6 @@
 #include "dash_model.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -61,7 +62,7 @@ static bool json_bool(const cJSON *obj, const char *key, bool fallback)
     return cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
 }
 
-static dash_run_state_t run_state(const char *status, const char *conclusion)
+dash_run_state_t dash_run_state(const char *status, const char *conclusion)
 {
     if (!status) {
         return DASH_RUN_UNKNOWN;
@@ -221,44 +222,51 @@ bool dash_model_parse(dash_state_t *st, const char *json, size_t len)
         return false;
     }
 
-    /* Parse into a scratch copy so a half-bad document never corrupts the state. */
-    static dash_state_t next; /* static: ~3 KB, keep it off small task stacks */
-    next = *st;
-    next.generated_at = (int64_t)json_num(root, "generated_at", 0);
+    /* Use the same allocator as the JSON tree (PSRAM on the board). */
+    dash_state_t *next = cJSON_malloc(sizeof(*next));
+    if (!next) {
+        cJSON_Delete(root);
+        return false;
+    }
+    *next = *st;
+    next->generated_at = (int64_t)json_num(root, "generated_at", 0);
 
     const cJSON *gh = cJSON_GetObjectItemCaseSensitive(root, "github");
-    next.run_count = 0;
-    next.repo[0] = '\0';
-    next.github_fetched_at = 0;
+    next->run_count = 0;
+    next->repo[0] = '\0';
+    next->github_fetched_at = 0;
     if (cJSON_IsObject(gh)) {
-        copy_utf8(next.repo, sizeof(next.repo), json_str(gh, "repo"));
-        next.github_fetched_at = (int64_t)json_num(gh, "fetched_at", 0);
+        copy_utf8(next->repo, sizeof(next->repo), json_str(gh, "repo"));
+        next->github_fetched_at = (int64_t)json_num(gh, "fetched_at", 0);
         const cJSON *run;
         cJSON_ArrayForEach(run, cJSON_GetObjectItemCaseSensitive(gh, "runs"))
         {
-            if (next.run_count >= DASH_MAX_RUNS || !cJSON_IsObject(run)) {
+            if (next->run_count >= DASH_MAX_RUNS || !cJSON_IsObject(run)) {
                 break;
             }
-            dash_run_t *r = &next.runs[next.run_count++];
+            dash_run_t *r = &next->runs[next->run_count++];
             memset(r, 0, sizeof(*r));
-            r->id = (int64_t)json_num(run, "id", 0);
+            double id = json_num(run, "id", 0);
+            if (id >= 1 && id <= 9007199254740991.0 && id == (int64_t)id) r->id = (int64_t)id;
             copy_utf8(r->workflow, sizeof(r->workflow), json_str(run, "workflow"));
             copy_utf8(r->branch, sizeof(r->branch), json_str(run, "branch"));
             r->run_number = (int)json_num(run, "run_number", 0);
-            r->state = run_state(json_str(run, "status"), json_str(run, "conclusion"));
+            double attempt = json_num(run, "attempt", 1);
+            r->attempt = attempt >= 1 && attempt <= INT_MAX && attempt == (int)attempt ? (int)attempt : 0;
+            r->state = dash_run_state(json_str(run, "status"), json_str(run, "conclusion"));
             r->duration_s = (int)json_num(run, "duration_s", 0);
             r->updated_at = (int64_t)json_num(run, "updated_at", 0);
         }
     }
 
-    next.server_count = 0;
+    next->server_count = 0;
     const cJSON *srv;
     cJSON_ArrayForEach(srv, cJSON_GetObjectItemCaseSensitive(root, "servers"))
     {
-        if (next.server_count >= DASH_MAX_SERVERS || !cJSON_IsObject(srv)) {
+        if (next->server_count >= DASH_MAX_SERVERS || !cJSON_IsObject(srv)) {
             break;
         }
-        dash_server_t *s = &next.servers[next.server_count++];
+        dash_server_t *s = &next->servers[next->server_count++];
         memset(s, 0, sizeof(*s));
         copy_utf8(s->name, sizeof(s->name), json_str(srv, "name"));
         s->reported_at = (int64_t)json_num(srv, "reported_at", 0);
@@ -290,14 +298,14 @@ bool dash_model_parse(dash_state_t *st, const char *json, size_t len)
         }
     }
 
-    next.event_count = 0;
+    next->event_count = 0;
     const cJSON *evt;
     cJSON_ArrayForEach(evt, cJSON_GetObjectItemCaseSensitive(root, "events"))
     {
-        if (next.event_count >= DASH_MAX_EVENTS || !cJSON_IsObject(evt)) {
+        if (next->event_count >= DASH_MAX_EVENTS || !cJSON_IsObject(evt)) {
             break;
         }
-        dash_event_t *e = &next.events[next.event_count++];
+        dash_event_t *e = &next->events[next->event_count++];
         e->id = (int64_t)json_num(evt, "id", 0);
         const char *kind = json_str(evt, "kind");
         e->kind = !kind                                ? DASH_EVK_OTHER
@@ -317,34 +325,35 @@ bool dash_model_parse(dash_state_t *st, const char *json, size_t len)
         copy_utf8(e->subject, sizeof(e->subject), json_str(evt, "subject"));
     }
 
-    next.have_contrib = false;
+    next->have_contrib = false;
     const cJSON *contrib = cJSON_GetObjectItemCaseSensitive(gh, "contrib");
     const char *levels = json_str(contrib, "levels");
     if (levels) {
         size_t n = strlen(levels);
-        memset(next.contrib, 0, sizeof(next.contrib));
+        memset(next->contrib, 0, sizeof(next->contrib));
         /* keep the newest DASH_CONTRIB_DAYS days, right-aligned */
         size_t skip = n > DASH_CONTRIB_DAYS ? n - DASH_CONTRIB_DAYS : 0;
         size_t off = n < DASH_CONTRIB_DAYS ? DASH_CONTRIB_DAYS - n : 0;
         for (size_t i = skip; i < n; ++i) {
             char c = levels[i];
-            next.contrib[off + i - skip] = (uint8_t)(c >= '0' && c <= '4' ? c - '0' : 0);
+            next->contrib[off + i - skip] = (uint8_t)(c >= '0' && c <= '4' ? c - '0' : 0);
         }
-        copy_utf8(next.contrib_user, sizeof(next.contrib_user), json_str(contrib, "user"));
-        next.contrib_week = (int)json_num(contrib, "week", 0);
-        next.contrib_today = (int)json_num(contrib, "today", 0);
-        next.have_contrib = true;
+        copy_utf8(next->contrib_user, sizeof(next->contrib_user), json_str(contrib, "user"));
+        next->contrib_week = (int)json_num(contrib, "week", 0);
+        next->contrib_today = (int)json_num(contrib, "today", 0);
+        next->have_contrib = true;
     }
 
-    parse_mihome(&next, cJSON_GetObjectItemCaseSensitive(root, "mihome"));
-    parse_days(&next, cJSON_GetObjectItemCaseSensitive(root, "days"));
+    parse_mihome(next, cJSON_GetObjectItemCaseSensitive(root, "mihome"));
+    parse_days(next, cJSON_GetObjectItemCaseSensitive(root, "days"));
     const cJSON *health = cJSON_GetObjectItemCaseSensitive(root, "health");
-    if (!health) dash_health_init(&next.health); /* old hub, or a fixture without health */
-    else if (!dash_health_read(&next.health, health)) next.health.error = true;
+    if (!health) dash_health_init(&next->health); /* old hub, or a fixture without health */
+    else if (!dash_health_read(&next->health, health)) next->health.error = true;
 
     cJSON_Delete(root);
-    next.have_hub = true;
-    *st = next;
+    next->have_hub = true;
+    *st = *next;
+    cJSON_free(next);
     return true;
 }
 

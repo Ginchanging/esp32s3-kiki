@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "dash_model.h"
+#include "dash_actions.h"
 #include "esp_err.h"
 
 /* --- shared dashboard state (guarded by a mutex) --- */
@@ -62,10 +63,21 @@ void app_request_calendar(int32_t day, uint16_t offset);
 bool app_take_calendar_request(int32_t *day, uint16_t *offset, uint32_t *seq);
 bool app_calendar_current_locked(uint32_t seq); /* state mutex must be held */
 
+typedef struct {
+    uint32_t seq;
+    bool ok;
+    dash_action_page_t page;
+} app_action_reply_t;
+
+uint32_t app_request_action(const dash_action_query_t *query); /* NULL cancels */
+bool app_take_action_request(dash_action_query_t *query, uint32_t *seq);
+void app_finish_action_request(uint32_t seq, const char *json, size_t len);
+bool app_take_action_reply(app_action_reply_t *reply);
+
 /* Rotary knob events (dash_knob_ev_t) from the knob task or the KNOB serial command;
  * the UI task takes them. */
 void app_knob_push(int ev, int steps);
-bool app_knob_take(int *ev, int *steps);
+bool app_knob_take(int *ev, int *steps, uint32_t *at_ms);
 void app_knob_set_reverse(bool rev); /* NVS dash/knob_rev, loaded by the knob task */
 
 /* "CAT ..." test command for Kiki, applied by the UI task */
@@ -93,7 +105,8 @@ void fetch_task(void *arg);
 int app_hub_json(const char *url, const char *token, const char *post, char *out, int cap, int *len);
 void app_ota_init(void);
 void app_ota_poll(const char *token, char *scratch, int capacity);
-void app_ota_hub_ok(void);
+void app_ota_hub_result(int status, bool parsed);
+void app_ota_ui_startup(const char *stage); /* pass a string literal */
 void app_ota_ui_tick(void);
 void app_ota_ui_presented(uint8_t number);
 void app_ota_print_status(const char *prefix);
@@ -110,6 +123,7 @@ void app_led_print_status(const char *prefix);
 #define DASH_HUB_FLIGHTS_URL DASH_HUB_BASE "/api/device/flights"
 #define DASH_HUB_MI_URL DASH_HUB_BASE "/api/device/mi" /* Mi Home control (POST) */
 #define DASH_HUB_CALENDAR_URL DASH_HUB_BASE "/api/device/calendar"
+#define DASH_HUB_ACTIONS_URL DASH_HUB_BASE "/api/device/actions"
 #define DASH_HUB_CN "esp-dash.local"
 #define DASH_FETCH_PERIOD_MS 30000
 #define DASH_FLIGHT_PERIOD_MS 10000

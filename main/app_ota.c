@@ -35,6 +35,8 @@ typedef struct {
 static ota_record_t record;
 static bool record_loaded, resolving_boot;
 static atomic_bool verified, hub_ok;
+static atomic_int hub_status, mark_error;
+static _Atomic(const char *) ui_startup;
 static atomic_uint ui_heartbeat, presented;
 static char elf_sha[65], device_id[13];
 static int64_t next_check;
@@ -81,24 +83,51 @@ static void finish(dash_ota_phase_t phase, const char *error)
     printf("dash: ota result=%d error=%s\n", (int)phase, record.error);
 }
 
+static bool ui_alive(int64_t now)
+{
+    uint32_t beat = atomic_load(&ui_heartbeat);
+    return beat && (uint32_t)now - beat < 2000;
+}
+
+static const char *verify_waiting_for(int64_t now, char *buf, size_t size)
+{
+    if (!campus_net_storage_ready()) return "storage_not_ready";
+    if (!ui_alive(now)) {
+        if (atomic_load(&ui_heartbeat)) return "ui_heartbeat_stale";
+        const char *stage = atomic_load(&ui_startup);
+        return stage ? stage : "ui_not_started";
+    }
+    if (!atomic_load(&hub_ok)) {
+        int status = atomic_load(&hub_status);
+        if (status == 200) return "status_parse_failed";
+        if (!status) return "status_not_fetched";
+        snprintf(buf, size, "status_http_%d", status);
+        return buf;
+    }
+    int error = atomic_load(&mark_error);
+    return error ? esp_err_to_name(error) : "";
+}
+
 static void verifier(void *unused)
 {
     (void)unused;
     int64_t start = esp_timer_get_time() / 1000;
     for (;;) {
         int64_t now = esp_timer_get_time() / 1000;
-        bool ui_alive = atomic_load(&ui_heartbeat) &&
-                        (uint32_t)now - atomic_load(&ui_heartbeat) < 2000;
         bool healthy = now - start >= 10000 && campus_net_storage_ready() &&
-                       ui_alive && atomic_load(&hub_ok);
+                       ui_alive(now) && atomic_load(&hub_ok);
 #ifdef DASH_OTA_TEST_FAIL_BOOT
         healthy = false;
 #endif
-        if (healthy && esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-            atomic_store(&verified, true);
-            state(DASH_OTA_SUCCEEDED, 0, 0, 0);
-            printf("dash: ota boot confirmed\n");
-            vTaskDelete(NULL);
+        if (healthy) {
+            esp_err_t result = esp_ota_mark_app_valid_cancel_rollback();
+            atomic_store(&mark_error, result);
+            if (result == ESP_OK) {
+                atomic_store(&verified, true);
+                state(DASH_OTA_SUCCEEDED, 0, 0, 0);
+                printf("dash: ota boot confirmed\n");
+                vTaskDelete(NULL);
+            }
         }
 #ifdef DASH_OTA_TEST_FAIL_BOOT
         bool expired = now - start >= 15000; /* explicitly marked verification build */
@@ -106,7 +135,9 @@ static void verifier(void *unused)
         bool expired = now - start >= 120000;
 #endif
         if (expired) {
-            printf("dash: ota boot verification failed; rolling back\n");
+            char reason[48];
+            printf("dash: ota boot verification failed (%s); rolling back\n",
+                   verify_waiting_for(now, reason, sizeof(reason)));
             esp_ota_mark_app_invalid_rollback_and_reboot();
             esp_restart();
         }
@@ -132,7 +163,13 @@ void app_ota_init(void)
     }
 }
 
-void app_ota_hub_ok(void) { atomic_store(&hub_ok, true); }
+void app_ota_hub_result(int status, bool parsed)
+{
+    atomic_store(&hub_status, status);
+    if (parsed) atomic_store(&hub_ok, true);
+}
+
+void app_ota_ui_startup(const char *stage) { atomic_store(&ui_startup, stage); }
 void app_ota_ui_tick(void) { atomic_store(&ui_heartbeat, (uint32_t)(esp_timer_get_time() / 1000)); }
 void app_ota_ui_presented(uint8_t number) { atomic_store(&presented, number); }
 
@@ -325,8 +362,10 @@ void app_ota_poll(const char *token, char *scratch, int capacity)
             save_record();
         } else { next_check = now + 5000; return; }
     }
-    if (boot_pending && !atomic_load(&verified) && hex_string(record.job, 32))
-        report(token, "validating", "", scratch, capacity);
+    if (boot_pending && !atomic_load(&verified) && hex_string(record.job, 32)) {
+        char reason[48];
+        report(token, "validating", verify_waiting_for(now, reason, sizeof(reason)), scratch, capacity);
+    }
     char dev[240], req[256];
     device_json(dev, sizeof(dev));
     snprintf(req, sizeof(req), "{%s}", dev);

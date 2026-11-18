@@ -11,8 +11,8 @@
  *   a / b / e  AI agent push: done / needs you / error (agent-bemfa-notify)
  *   w     Mi Home: the washer finishes            v     flyover demo (labelled)
  *   y / Y Kiki's diary / weekly report (normally written at 23:00, weekly on Sundays)
- *   [ / ] knob: turn (pages)    { / }  knob: press + turn (lamp brightness)
- *   k / K knob: click (lamp on/off) / long press (pomodoro)
+ *   [ / ] knob: turn (page context)    { / }  knob: press + turn (pages)
+ *   k / K knob: context click / long press (pomodoro)
  *   q     quit
  *   A second small window shows the virtual status LED.
  *
@@ -22,7 +22,8 @@
  *            [--look name] [--ms N]   (--ms: let animations run N ms before the shot)
  *            [--mi-done]              (Mi Home washer-done message + popup)
  *            [--diary day|week]       (Kiki's diary + popup)
- *            [--knob click|long|turn:N|hold:N]   (rotary knob event, e.g. the brightness toast)
+ *            [--knob 'turn:1;wait:150;turn:-1;wait:150;turn:1;wait:150;turn:-1']
+ *              click|long|release|turn:N|hold:N|wait:MS, separated by semicolons
  *
  * Fixtures are hub JSON (/api/device/status) plus an optional "_sim" object
  * describing device-side state (Wi-Fi, MQTT, sensor, Muse history, now).
@@ -52,6 +53,13 @@ static int64_t fixture_loaded_ms; /* wall ms when the fixture was loaded */
 static cJSON *calendar_fixture;
 static int64_t calendar_shot_now;
 static bool calendar_update_queued;
+static char *action_fixture;
+static size_t action_fixture_len;
+static struct {
+    dash_action_query_t query;
+    uint32_t seq;
+    bool pending, queued;
+} action_demo;
 static const char *ota_demo;
 
 static void apply_ota_demo(void)
@@ -221,7 +229,9 @@ static bool load_fixture(const char *path)
     calendar_fixture = cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(calendar_root, "calendar"), true);
     cJSON_Delete(calendar_root);
     dash_calendar_parse(&state.calendar, json, len);
-    free(json);
+    free(action_fixture);
+    action_fixture = json;
+    action_fixture_len = len;
     fixture_loaded_ms = wall_ms();
     printf("fixture: %s  runs=%d servers=%d events=%d muse=%d\n", path, state.run_count,
            state.server_count, state.event_count, state.muse_count);
@@ -232,6 +242,30 @@ static void calendar_update_async(void *unused)
 {
     calendar_update_queued = false;
     dash_ui_update(&state, calendar_shot_now ? calendar_shot_now : sim_now());
+}
+
+static void action_reply_async(void *unused)
+{
+    action_demo.queued = false;
+    if (!action_demo.pending) return;
+    action_demo.pending = false;
+    dash_action_page_t page;
+    bool ok = action_fixture && dash_actions_parse(&page, &action_demo.query, action_fixture, action_fixture_len);
+    printf("action query run=%lld attempt=%d jobs=%d job=%lld steps=%d rows=%d total=%d\n",
+           (long long)action_demo.query.run_id, action_demo.query.attempt, action_demo.query.jobs_page,
+           (long long)action_demo.query.job_id, action_demo.query.steps_page, ok ? page.count : -1, ok ? page.total : -1);
+    dash_ui_action_reply(action_demo.seq, ok ? &page : NULL);
+}
+
+static uint32_t action_request(const dash_action_query_t *query)
+{
+    uint32_t seq = ++action_demo.seq;
+    action_demo.pending = query != NULL;
+    if (query) {
+        action_demo.query = *query;
+        if (!action_demo.queued) action_demo.queued = lv_async_call(action_reply_async, NULL) == LV_RESULT_OK;
+    }
+    return seq;
 }
 
 static void calendar_number(cJSON *root, const char *name, double value)
@@ -399,6 +433,33 @@ static void run_for(int ms)
     }
 }
 
+static bool knob_sequence(const char *q)
+{
+    while (*q) {
+        int n = 1, used = 0;
+        dash_knob_ev_t ev;
+        if (sscanf(q, "wait:%d%n", &n, &used) == 1 && used) {
+            if ((q[used] && q[used] != ';') || n < 0 || n > 3600000) return false;
+            run_for(n);
+            dash_ui_update(&state, calendar_shot_now);
+            q += used;
+            if (*q == ';') ++q;
+            continue;
+        }
+        if (sscanf(q, "turn:%d%n", &n, &used) == 1 && used) ev = DASH_KNOB_TURN;
+        else if (sscanf(q, "hold:%d%n", &n, &used) == 1 && used) ev = DASH_KNOB_HOLD_TURN;
+        else if (!strncmp(q, "click", 5)) ev = DASH_KNOB_CLICK, used = 5;
+        else if (!strncmp(q, "long", 4)) ev = DASH_KNOB_LONG, used = 4;
+        else if (!strncmp(q, "release", 7)) ev = DASH_KNOB_RELEASE, used = 7;
+        else return false;
+        if (q[used] && q[used] != ';') return false;
+        dash_ui_knob(ev, n);
+        q += used;
+        if (*q == ';') ++q;
+    }
+    return true;
+}
+
 /* drag from (x0,y0) to (x1,y1) in 12 steps of 30 ms, then let the snap animation finish */
 static void swipe(int x0, int y0, int x1, int y1)
 {
@@ -486,6 +547,7 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
     calendar_shot_now = now;
     dash_ui_set_mi_cb(mi_request);
     dash_ui_set_calendar_cb(calendar_request);
+    dash_ui_set_action_cb(action_request);
     dash_ui_create(disp, lang);
     dash_ui_set_page(page, false);
     if (muse) {
@@ -536,16 +598,10 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
         printf("diary (%zu bytes): %s\n", strlen(m.text), m.text);
     }
     if (knob) {
-        int n = 1;
-        const char *colon = strchr(knob, ':');
-        if (colon) {
-            n = atoi(colon + 1);
+        if (!knob_sequence(knob)) {
+            fprintf(stderr, "invalid --knob sequence\n");
+            return 2;
         }
-        dash_knob_ev_t ev = !strncmp(knob, "click", 5)  ? DASH_KNOB_CLICK
-                            : !strncmp(knob, "long", 4) ? DASH_KNOB_LONG
-                            : !strncmp(knob, "hold", 4) ? DASH_KNOB_HOLD_TURN
-                                                        : DASH_KNOB_TURN;
-        dash_ui_knob(ev, n);
     }
     if (flyover) dash_ui_debug_flyover();
     if (swipes) { /* "wait:6500;tap:x,y,n;..." also tests timed, actionable notifications */
@@ -879,6 +935,7 @@ static int run_interactive(const char *fixture, dash_lang_t lang)
     }
     dash_ui_set_mi_cb(mi_request);
     dash_ui_set_calendar_cb(calendar_request);
+    dash_ui_set_action_cb(action_request);
     dash_ui_create(disp, lang);
     dash_ui_update(&state, sim_now());
 

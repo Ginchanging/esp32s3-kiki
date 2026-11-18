@@ -63,7 +63,7 @@ bool dash_flights_parse(dash_flights_t *st, const char *json, size_t len)
     double ts = number(o, "fetched_at", 0);
     if (ts < 0 || ts > 4102444800.0) { cJSON_Delete(root); return false; }
     next.fetched_at = (int64_t)ts;
-    double radius = number(o, "radius_m", 20000), alert = number(o, "alert_radius_m", 5000);
+    double radius = number(o, "radius_m", 20000), alert = number(o, "alert_radius_m", 3000);
     if (radius < 1000 || radius > 100000 || alert < 1000 || alert > radius) {
         cJSON_Delete(root); return false;
     }

@@ -166,6 +166,12 @@ static void select_tab(lv_event_t *e)
     render();
 }
 
+void dash_health_ui_step(int delta)
+{
+    health.tab = ((health.tab + delta % 3) % 3 + 3) % 3;
+    render();
+}
+
 void dash_health_ui_create(lv_obj_t *tile)
 {
     health.panel = lv_obj_create(tile);

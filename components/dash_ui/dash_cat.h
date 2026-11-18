@@ -17,6 +17,7 @@ typedef enum {
     DASH_CAT_REACT_TOUCH,       /* meow */
     DASH_CAT_REACT_MORNING,     /* yawn and stretch */
     DASH_CAT_REACT_POMO_DONE,   /* cheers */
+    DASH_CAT_REACT_PET,         /* A: leans over, shows tummy, settles and gets up */
     DASH_CAT_REACT_COUNT
 } dash_cat_react_t;
 
@@ -39,6 +40,7 @@ lv_obj_t *dash_cat_create(lv_obj_t *parent, int x, int y);
 void dash_cat_destroy(void);
 void dash_cat_set_ctx(const dash_cat_ctx_t *ctx);
 void dash_cat_react(dash_cat_react_t r);
+bool dash_cat_pet(void); /* low priority, with a two-second cooldown after finish/interruption */
 dash_cat_react_t dash_cat_reacting(void); /* NONE when back to the routine */
 /* Testing: force a look by name ("fish", "rope 1", ...) or NULL/"auto" to resume. */
 bool dash_cat_force_look(const char *name);

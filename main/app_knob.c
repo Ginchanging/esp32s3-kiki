@@ -12,6 +12,7 @@
 
 #include "app.h"
 #include "dash_ui.h"
+#include "knob_button.h"
 #include "driver/gpio.h"
 #include "driver/pulse_cnt.h"
 #include "esp_timer.h"
@@ -19,7 +20,6 @@
 #include "freertos/task.h"
 
 #define KNOB_COUNTS_PER_DETENT 4 /* EC11: one full quadrature cycle per click */
-#define KNOB_LONG_MS 600
 #define KNOB_POLL_MS 10
 #define KNOB_LIMIT 1000
 
@@ -78,38 +78,24 @@ void knob_task(void *arg)
     printf("dash: knob ready (CLK %d, DT %d, SW %d)\n", KNOB_GPIO_A, KNOB_GPIO_B, KNOB_GPIO_SW);
 
     int prev = 0, acc = 0;
-    bool raw_last = false, pressed = false, turned = false, long_sent = false;
+    bool raw_last = false, pressed = false;
+    knob_button_t button = {0};
     int stable = 0;
-    int64_t press_ms = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(KNOB_POLL_MS));
-        int64_t now = esp_timer_get_time() / 1000;
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
         /* button: active low, 20 ms debounce */
         bool raw = gpio_get_level(KNOB_GPIO_SW) == 0;
-        stable = raw == raw_last ? stable + 1 : 0;
+        stable = raw == raw_last ? (stable < 2 ? stable + 1 : 2) : 0;
         raw_last = raw;
         if (stable == 2 && raw != pressed) {
             pressed = raw;
-            if (pressed) {
-                press_ms = now;
-                turned = long_sent = false;
-            } else if (turned) {
-                app_knob_push(DASH_KNOB_RELEASE, 0); /* end of a brightness change */
-            } else if (!long_sent) {
-                app_knob_push(DASH_KNOB_CLICK, 0);
-            }
-        }
-        if (pressed && !turned && !long_sent && now - press_ms >= KNOB_LONG_MS) {
-            long_sent = true;
-            app_knob_push(DASH_KNOB_LONG, 0);
         }
 
         /* rotation */
         int count = 0;
-        if (pcnt_unit_get_count(unit, &count) != ESP_OK) {
-            continue;
-        }
+        if (pcnt_unit_get_count(unit, &count) != ESP_OK) count = prev;
         acc += count - prev;
         prev = count;
         if (count > KNOB_LIMIT / 2 || count < -KNOB_LIMIT / 2) { /* stay far from the limits */
@@ -122,10 +108,12 @@ void knob_task(void *arg)
             if (reversed) {
                 detents = -detents;
             }
-            if (pressed) {
-                turned = true;
-            }
-            app_knob_push(pressed ? DASH_KNOB_HOLD_TURN : DASH_KNOB_TURN, detents);
+            app_knob_push(pressed || button.down ? DASH_KNOB_HOLD_TURN : DASH_KNOB_TURN, detents);
+        }
+        knob_button_action_t action = knob_button_update(&button, pressed, detents, now);
+        if (action != KNOB_BUTTON_NONE) {
+            app_knob_push(action == KNOB_BUTTON_RELEASE ? DASH_KNOB_RELEASE
+                          : action == KNOB_BUTTON_LONG ? DASH_KNOB_LONG : DASH_KNOB_CLICK, 0);
         }
     }
 }

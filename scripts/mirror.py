@@ -8,8 +8,8 @@ Frame lines from the board:  @F x1 y1 x2 y2 <fnv1a hex> <base64 RLE RGB565-LE>
 LED colour:                  @L r g b
 The command box sends board commands while the window holds the serial port:
   lang en | lang zh | demo gh_failed | demo off | muse 文字 | dash | knob long
-Rotary knob stand-in: mouse wheel = turn, Shift + wheel = press and turn (lamp
-brightness), right click = press (lamp on/off).
+Rotary knob stand-in: mouse wheel = page-context turn, Shift + wheel = press and
+turn (page navigation), right click = context click.
 """
 import argparse
 import base64

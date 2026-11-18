@@ -103,6 +103,7 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
 - **The scale never sends its weight to the device.** The S400 only exposes event entities. `MiHome.track_weighing()` stores absolute kg in `/var/lib/esp-dash/scale.json`, and the hub JSON carries relative values only (`d_last`, `d_30`, `hist`, in 0.1 kg). Never log weights.
 
 **Kiki** (`components/dash_ui/dash_cat.c`).
+- **Art workflow (user preference):** always look up online pose/animation references before drawing art. Produce viewable drafts with actual clickable PNG/GIF file links, wait for the user's selection, then integrate. Tool-internal image output alone has repeatedly been invisible in this client. For belly rubs the user selected A (gentle side flop): head tilts with shoulders and rests low, forepaws fold at the chest, limbs overlap naturally. Pose references: https://toffeecraft.itch.io/cat-retro and https://nekochan.jp/column/article/24459 . Native finished grids live in `cat_art.py`.
 - Layer priority: reaction > mood > pomodoro > routine.
   - Reactions come from hub events and agent pushes.
   - Moods come from system health.

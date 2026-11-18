@@ -396,7 +396,7 @@
     "source": "adsb.fi",
     "place": "榕园",
     "radius_m": 20000,
-    "alert_radius_m": 5000,
+    "alert_radius_m": 3000,
     "fetched_at": 1794544198,
     "aircraft": [],
     "events": []
