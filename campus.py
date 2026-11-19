@@ -190,6 +190,25 @@ def show_message(line):
         value = f"{fields.get('temp_c')} °C / {fields.get('humidity')}%" if fields.get("valid") == "1" else "暂无有效读数"
         print(f"  温湿度 {value} · SDA {fields.get('sda')} / SCL {fields.get('scl')} · "
               f"地址 {fields.get('addr')} · {fields.get('age')} 秒前 · 连续失败 {fields.get('failures')} 次 · {fields.get('err')}", flush=True)
+    elif label == "sit":
+        if "error" in fields:
+            print(f"久坐设置失败 · {fields['error']}", flush=True)
+        elif fields.get("demo") == "queued":
+            print("Kiki 久坐演示已排队。", flush=True)
+        else:
+            status = {"live": "已连接", "waiting": "等待数据", "stale": "数据中断", "error": "串口错误"}.get(fields.get("link"), "未知")
+            phase = {"idle": "等待入座", "entering": "确认入区", "present": "在区", "away": "暂离"}.get(fields.get("phase"), "未知")
+            if fields.get("enabled") == "0":
+                phase = "计时已关闭"
+            elif fields.get("reminded") == "1":
+                phase += "，本轮已提醒"
+            cm = fields.get("distance_cm", "-1")
+            distance = "无人" if cm == "0" else "暂无读数" if cm == "-1" else f"{cm} cm"
+            age = fields.get("age", "-1")
+            updated = "尚无上报" if age == "-1" else f"最后上报 {age} 秒前"
+            uart = fields.get("err") if fields.get("link") == "error" else f"{fields.get('baud', '0')} baud"
+            print(f"  LD2402 {status} · RX GPIO{fields.get('rx')} / {uart} · {distance} · {updated} · "
+                  f"范围 {fields.get('range_cm')} cm · {phase} · 已累计 {fields.get('elapsed')} 秒", flush=True)
     elif label == "rgb":
         status = "已就绪" if fields.get("ready") == "1" else "未就绪"
         print(f"  外置 RGB {status} · R/G/B 引脚 {fields.get('r')}/{fields.get('g')}/{fields.get('b')} · "
@@ -390,10 +409,10 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32 校园网 USB 串口工具")
     parser.add_argument("action", choices=("flash", "setup", "status", "scan", "retry", "clear",
                                            "dash", "token", "bemfa", "lang", "demo", "muse",
-                                           "led", "monitor", "cat", "agent", "mi", "knob", "lcd", "wifips"))
+                                           "led", "monitor", "cat", "agent", "mi", "knob", "lcd", "wifips", "sit"))
     parser.add_argument("value", nargs="?",
                         help="lang: zh/en；demo: ok/gh_failed/gh_running/server_down/flight/health/off；"
-                             "muse: 提醒文字；led: GPIO 号或 off；token/bemfa: clear")
+                             "muse: 提醒文字；led: GPIO 号或 off；token/bemfa: clear；sit: status/on/off/range <cm>/demo")
     parser.add_argument("--port", help="指定串口，例如 COM5 或 /dev/cu.usbmodem1101")
     parser.add_argument("--bootloader", action="store_true", help="已手动进入下载模式")
     parser.add_argument("--recover", action="store_true", help="USB 恢复到 ota_0（保留配置和另一固件槽）")
@@ -436,6 +455,10 @@ def main():
             if args.action == "cat":
                 device.request("CAT " + " ".join(args.value.split()) if args.value else "CAT auto")
                 return 0
+            if args.action == "sit":
+                command = " ".join((args.value or "status").split())
+                replies = device.request(f"SIT {command}")
+                return 0 if any(r.startswith(("sit enabled=", "sit demo=")) for r in replies) else 1
             if args.action in ("lang", "demo", "led", "wifips"):
                 if not args.value:
                     raise ValueError(f"{args.action} 需要一个参数。")

@@ -1,7 +1,7 @@
 /*
  * macOS simulator for the ESP32-S3 desk dashboard.
  *
- * Interactive:  dash_sim [fixtures/ok.json] [--lang zh|en]
+ * Interactive:  dash_sim [fixtures/ok.json] [--lang zh|en] [--tool pomodoro|calendar|sit|health] [--sit-demo]
  *   mouse = touch (tap Kiki = meow, long-press Kiki = pomodoro), drag to swipe pages
  *   1..9  load the Nth fixture in the same folder      <- / ->  previous / next page (wraps)
  *   s / f / x  CI passed / failed / started            d / u   server down / back up
@@ -18,8 +18,10 @@
  *
  * Headless screenshot (no window):
  *   dash_sim --shot out.bmp --fixture f.json [--page N] [--lang zh|en] [--now EPOCH]
- *            [--muse "text"] [--event] [--scale 2] [--act N] [--night] [--react N]
+ *            [--tool pomodoro|calendar|sit|health]  (--page 3 opens the toolbox)
+ *            [--muse "text"] [--iphone "text"] [--event] [--scale 2] [--act N] [--night] [--react N]
  *            [--look name] [--ms N]   (--ms: let animations run N ms before the shot)
+ *            [--sit-demo]             (labelled desk-break animation)
  *            [--mi-done]              (Mi Home washer-done message + popup)
  *            [--diary day|week]       (Kiki's diary + popup)
  *            [--knob 'turn:1;wait:150;turn:-1;wait:150;turn:1;wait:150;turn:-1']
@@ -50,6 +52,8 @@ static dash_event_cursor_t cursor;
 static dash_led_timers_t led_timers;
 static int64_t fixture_now;      /* "now" from the fixture, 0 = real clock */
 static int64_t fixture_loaded_ms; /* wall ms when the fixture was loaded */
+static dash_sit_status_t fixture_sit = {.enabled = true, .range_cm = DASH_SIT_RANGE_CM};
+static const char *const tool_names[DASH_TOOL_COUNT] = {"none", "pomodoro", "calendar", "sit", "health"};
 static cJSON *calendar_fixture;
 static int64_t calendar_shot_now;
 static bool calendar_update_queued;
@@ -146,6 +150,39 @@ static char *read_file(const char *path, size_t *len)
     return buf;
 }
 
+static int name_index(const char *name, const char *const *choices, size_t count)
+{
+    if (name) {
+        for (size_t i = 0; i < count; ++i) {
+            if (!strcmp(name, choices[i])) return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void apply_sit_fixture(const cJSON *obj)
+{
+    static const char *const links[] = {"waiting", "live", "stale", "error"};
+    static const char *const phases[] = {"idle", "entering", "present", "away"};
+    fixture_sit = (dash_sit_status_t){.enabled = true, .range_cm = DASH_SIT_RANGE_CM};
+    if (!cJSON_IsObject(obj)) return;
+    int link = name_index(cJSON_GetStringValue(cJSON_GetObjectItem(obj, "link")), links, 4);
+    int phase = name_index(cJSON_GetStringValue(cJSON_GetObjectItem(obj, "phase")), phases, 4);
+    if (link >= 0) fixture_sit.link = (dash_sit_link_t)link;
+    if (phase >= 0) fixture_sit.phase = (dash_sit_phase_t)phase;
+    const cJSON *range = cJSON_GetObjectItem(obj, "range_cm");
+    const cJSON *distance = cJSON_GetObjectItem(obj, "distance_cm");
+    const cJSON *elapsed = cJSON_GetObjectItem(obj, "elapsed_s");
+    if (cJSON_IsNumber(range) && range->valueint > 0 && range->valueint <= DASH_LD2402_MAX_CM)
+        fixture_sit.range_cm = (uint16_t)range->valueint;
+    if (cJSON_IsNumber(distance) && distance->valueint > 0 && distance->valueint <= DASH_LD2402_MAX_CM)
+        fixture_sit.distance_cm = (uint16_t)distance->valueint;
+    if (cJSON_IsNumber(elapsed) && elapsed->valueint > 0)
+        fixture_sit.elapsed_s = (uint32_t)elapsed->valueint;
+    fixture_sit.enabled = !cJSON_IsFalse(cJSON_GetObjectItem(obj, "enabled"));
+    fixture_sit.reminded = cJSON_IsTrue(cJSON_GetObjectItem(obj, "reminded"));
+}
+
 /* Device-side state that the hub does not send. */
 static void apply_sim_section(const char *json, size_t len)
 {
@@ -162,6 +199,7 @@ static void apply_sim_section(const char *json, size_t len)
 
     cJSON *root = cJSON_ParseWithLength(json, len);
     const cJSON *sim = cJSON_GetObjectItemCaseSensitive(root, "_sim");
+    apply_sit_fixture(cJSON_GetObjectItemCaseSensitive(sim, "sit"));
     if (cJSON_IsObject(sim)) {
         const cJSON *v;
         if ((v = cJSON_GetObjectItemCaseSensitive(sim, "now")) && cJSON_IsNumber(v)) {
@@ -526,10 +564,17 @@ static bool write_bmp(const char *path, int scale)
     return true;
 }
 
-static int run_shot(const char *out, const char *fixture, int page, dash_lang_t lang,
-                    int64_t now_arg, const char *muse, bool event, int scale, int act, bool night,
+static void select_initial_view(int page, dash_tool_t tool)
+{
+    dash_ui_set_sit_status(&fixture_sit);
+    if (tool != DASH_TOOL_NONE) dash_ui_open_tool(tool);
+    else dash_ui_set_page(page, false);
+}
+
+static int run_shot(const char *out, const char *fixture, int page, dash_tool_t tool, dash_lang_t lang,
+                    int64_t now_arg, const char *muse, const char *iphone, bool event, int scale, int act, bool night,
                     int react, const char *look, int run_ms, int agent, const char *swipes, bool mi_done,
-                    int diary, const char *knob, bool flyover)
+                    int diary, const char *knob, bool flyover, bool sit_demo)
 {
     lv_init();
     lv_tick_set_cb(fake_tick);
@@ -549,9 +594,12 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
     dash_ui_set_calendar_cb(calendar_request);
     dash_ui_set_action_cb(action_request);
     dash_ui_create(disp, lang);
-    dash_ui_set_page(page, false);
+    select_initial_view(page, tool);
     if (muse) {
         dash_muse_push(&state, muse, now);
+    }
+    if (iphone) {
+        dash_msg_push(&state, DASH_SRC_IPHONE, DASH_MSG_INFO, "", iphone, now);
     }
     dash_ui_update(&state, now);
     if (act >= 0) {
@@ -563,7 +611,9 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
     if (look) {
         dash_ui_debug_look(look);
     }
-    if (muse) {
+    if (iphone) {
+        dash_ui_show_agent(&state.muse[0], 6000);
+    } else if (muse) {
         dash_ui_show_muse(muse, now, 0);
     } else if (event && state.event_count) {
         dash_ui_on_event(&state.events[state.event_count - 1]);
@@ -604,6 +654,7 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
         }
     }
     if (flyover) dash_ui_debug_flyover();
+    if (sit_demo) dash_ui_show_sit(true);
     if (swipes) { /* "wait:6500;tap:x,y,n;..." also tests timed, actionable notifications */
         lv_indev_t *finger = lv_indev_create();
         lv_indev_set_type(finger, LV_INDEV_TYPE_POINTER);
@@ -615,9 +666,10 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
         while (*q) {
             int x0, y0, x1, y1, n, used = 0;
             int before = dash_ui_get_page();
+            dash_tool_t before_tool = dash_ui_get_tool();
             if (sscanf(q, "wait:%d%n", &n, &used) == 1) {
                 run_for(n);
-                printf("wait %d ms page=%d\n", n, dash_ui_get_page());
+                printf("wait %d ms page=%d tool=%s\n", n, dash_ui_get_page(), tool_names[dash_ui_get_tool()]);
             } else if (!strncmp(q, "muse", 4)) {
                 dash_ui_show_muse("Muse priority test", now, 6000);
                 used = 4;
@@ -626,10 +678,12 @@ static int run_shot(const char *out, const char *fixture, int page, dash_lang_t 
                 used = 4;
             } else if (sscanf(q, "tap:%d,%d,%d%n", &x0, &y0, &n, &used) == 3) {
                 taps(x0, y0, n);
-                printf("tap x%d at %d,%d  page %d -> %d\n", n, x0, y0, before, dash_ui_get_page());
+                printf("tap x%d at %d,%d  page %d -> %d  tool %s -> %s\n", n, x0, y0, before, dash_ui_get_page(),
+                       tool_names[before_tool], tool_names[dash_ui_get_tool()]);
             } else if (sscanf(q, "%d,%d,%d,%d%n", &x0, &y0, &x1, &y1, &used) == 4) {
                 swipe(x0, y0, x1, y1);
-                printf("swipe %d,%d->%d,%d  page %d -> %d\n", x0, y0, x1, y1, before, dash_ui_get_page());
+                printf("swipe %d,%d->%d,%d  page %d -> %d  tool %s -> %s\n", x0, y0, x1, y1, before, dash_ui_get_page(),
+                       tool_names[before_tool], tool_names[dash_ui_get_tool()]);
             } else {
                 break;
             }
@@ -691,7 +745,8 @@ static void select_fixture(int i)
         return;
     }
     fixture_index = i;
-    load_fixture(fixture_paths[i]);
+    if (!load_fixture(fixture_paths[i])) return;
+    dash_ui_set_sit_status(&fixture_sit);
     new_events_to_popups();
     dash_ui_update(&state, sim_now());
 }
@@ -898,7 +953,7 @@ static uint32_t sdl_tick(void)
     return SDL_GetTicks();
 }
 
-static int run_interactive(const char *fixture, dash_lang_t lang)
+static int run_interactive(const char *fixture, int page, dash_tool_t tool, dash_lang_t lang, bool sit_demo)
 {
     lv_init();
     lv_tick_set_cb(sdl_tick);
@@ -937,7 +992,9 @@ static int run_interactive(const char *fixture, dash_lang_t lang)
     dash_ui_set_calendar_cb(calendar_request);
     dash_ui_set_action_cb(action_request);
     dash_ui_create(disp, lang);
+    select_initial_view(page, tool);
     dash_ui_update(&state, sim_now());
+    if (sit_demo) dash_ui_show_sit(true);
 
     /* keyboard: an invisible focused object on the top layer receives LV_EVENT_KEY */
     lv_group_t *g = lv_group_create();
@@ -966,10 +1023,11 @@ static int run_interactive(const char *fixture, dash_lang_t lang)
 
 int main(int argc, char **argv)
 {
-    const char *shot = NULL, *fixture = NULL, *muse = NULL;
+    const char *shot = NULL, *fixture = NULL, *muse = NULL, *iphone = NULL;
     int page = 0, scale = 2;
+    dash_tool_t tool = DASH_TOOL_NONE;
     int64_t now = 0;
-    bool event = false, night = false, flyover = false;
+    bool event = false, night = false, flyover = false, sit_demo = false;
     int act = -1, react = 0, run_ms = 0, agent = 0;
     bool mi_done = false;
     int diary = 0;
@@ -984,12 +1042,22 @@ int main(int argc, char **argv)
             fixture = v, ++i;
         } else if (!strcmp(a, "--page") && v) {
             page = atoi(v), ++i;
+        } else if (!strcmp(a, "--tool") && v) {
+            int selected = name_index(v, tool_names, DASH_TOOL_COUNT);
+            if (selected <= DASH_TOOL_NONE) {
+                fprintf(stderr, "--tool expects pomodoro, calendar, sit, or health\n");
+                return 2;
+            }
+            tool = (dash_tool_t)selected;
+            ++i;
         } else if (!strcmp(a, "--lang") && v) {
             lang = strcmp(v, "en") == 0 ? DASH_LANG_EN : DASH_LANG_ZH, ++i;
         } else if (!strcmp(a, "--now") && v) {
             now = atoll(v), ++i;
         } else if (!strcmp(a, "--muse") && v) {
             muse = v, ++i;
+        } else if (!strcmp(a, "--iphone") && v) {
+            iphone = v, ++i;
         } else if (!strcmp(a, "--scale") && v) {
             scale = atoi(v) < 1 ? 1 : atoi(v), ++i;
         } else if (!strcmp(a, "--event")) {
@@ -998,6 +1066,8 @@ int main(int argc, char **argv)
             night = true;
         } else if (!strcmp(a, "--flyover")) {
             flyover = true;
+        } else if (!strcmp(a, "--sit-demo")) {
+            sit_demo = true;
         } else if (!strcmp(a, "--act") && v) {
             act = atoi(v), ++i;
         } else if (!strcmp(a, "--react") && v) {
@@ -1025,12 +1095,15 @@ int main(int argc, char **argv)
             return 2;
         }
     }
+    /* Keep the two former tool-page screenshot numbers usable at the CLI boundary. */
+    if (tool == DASH_TOOL_NONE && page == 7) tool = DASH_TOOL_CALENDAR;
+    if (tool == DASH_TOOL_NONE && page == 8) tool = DASH_TOOL_HEALTH;
     if (shot) {
-        return run_shot(shot, fixture, page, lang, now, muse, event, scale, act, night, react, look, run_ms, agent, swipes, mi_done,
-                        diary, knob, flyover);
+        return run_shot(shot, fixture, page, tool, lang, now, muse, iphone, event, scale, act, night, react, look, run_ms, agent, swipes, mi_done,
+                        diary, knob, flyover, sit_demo);
     }
 #if DASH_LV_SIM
-    return run_interactive(fixture, lang);
+    return run_interactive(fixture, page, tool, lang, sit_demo);
 #else
     fprintf(stderr, "built without SDL\n");
     return 2;

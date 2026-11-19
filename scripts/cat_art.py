@@ -260,6 +260,63 @@ def body_stretch(phase=0):
     return L
 
 
+# A: weight moves onto the hind paws as the forepaws slide forward, then back.
+# Pose references: https://unsplash.com/photos/V9DiohYX3Xg and
+# https://commons.wikimedia.org/wiki/File:Stretching_street_cat_(41753892522).jpg
+# Standing forelegs: https://commons.wikimedia.org/wiki/File:Cat,_Standard_Orange_Tabby.jpg
+BREAK_STRETCH = {
+    # head x/y, rump y, far and near forepaw x, tail-tip height
+    "crouch": (10, 20, 21, 11, 14.4, 20),
+    "reach": (9.5, 22, 18.5, 6.6, 10.4, 13),
+    "hold": (10.3, 23, 17, 3.8, 7.8, 9),
+    "recover": (9.5, 21, 19.5, 9, 12.8, 13),
+    "stand": (10.5, 17, 21, 12.1, 15.6, 17),
+}
+
+
+def body_break_stretch(pose):
+    cx, cy, rump, far_paw, near_paw, tip = BREAK_STRETCH[pose]
+    L = Layer()
+    tail(L, [(25, rump + 2), (29, rump - 1), (28.5, tip + 2), (25.5, tip)])
+
+    # Plant both rear paws through the bow. The far legs sit a pixel higher.
+    L.stroke([(21, rump + 1), (21, 25), (20, 29)], 1.5, "d")
+    L.ellipse(20, 29, 1.9, 1.1, "c")
+    L.stroke([(cx + 3, cy + 3.5), (far_paw, 28.3)], 1.2, "d")
+    L.ellipse(far_paw, 28.6, 1.45, 1.05, "c")
+    L.ellipse(23.2, rump + 0.8, 5.4, 4.4, "o")
+    L.stroke([(25, rump + 1), (25.5, 25), (25, 29)], 1.8, "o")
+    L.ellipse(25, 30, 2.2, 1.25, "c")
+    L.poly([(cx + 3, cy + 1), (21, rump - 2), (25, rump + 2), (24, rump + 5),
+            (cx + 6, cy + 6), (cx + 1, cy + 5)], "o")
+
+    # Keep each paw at the end of its leg. As the shoulders rise, the legs
+    # straighten under the chest and only the cream toes touch the floor.
+    L.stroke([(cx + 5.8, cy + 3.7), (near_paw, 29.4)], 1.5, "o")
+    L.ellipse(near_paw - 0.3, 30, 1.75, 1.2, "c")
+    for x, y in ((20, rump - 2.5), (23, rump - 3.1), (26, rump - 1.8)):
+        L.stroke([(x, y), (x + 1, y + 2.2)], 0.73, "d")
+
+    # Low three-quarter head, with the nose and cheeks in Kiki's orange coat.
+    L.poly([(cx - 6.5, cy - 2), (cx - 5.4, cy - 10), (cx - 1.5, cy - 5)], "o")
+    L.poly([(cx + 1.5, cy - 5), (cx + 5.8, cy - 10), (cx + 7, cy - 1)], "o")
+    L.ellipse(cx, cy, 7.3, 5.8, "o")
+    L.poly([(cx - 5.5, cy - 4.1), (cx - 5.1, cy - 8), (cx - 3.1, cy - 5.3)], "p")
+    L.poly([(cx + 3.1, cy - 5.4), (cx + 5.3, cy - 8), (cx + 5.7, cy - 3.6)], "p")
+    x, y = round(cx), round(cy)
+    L.pixels("d", [(x - 2, y - 5), (x, y - 5), (x - 1, y - 4), (x - 1, y - 3),
+                   (x + 5, y), (x + 6, y), (x + 6, y + 2), (x - 7, y + 1)])
+    if pose in ("reach", "hold"):
+        L.pixels("k", [(x - 5, y), (x - 4, y + 1), (x - 3, y),
+                       (x + 1, y), (x + 2, y + 1), (x + 3, y)])
+    else:
+        L.pixels("k", [(x - 4, y), (x - 4, y + 1), (x + 2, y), (x + 2, y + 1)])
+    L.set(x - 1, y + 2, "p")
+    L.set(x - 1, y + 3, "k")
+    L.outline()
+    return L
+
+
 def head_back():
     """A fixed rear-view head; the outdoor animation never turns it."""
     L = Layer()
@@ -717,6 +774,7 @@ SPRITES = {
     "body_rest_b": body_sleep(breath=0.6, awake=True),
     "body_stretch": body_stretch(),
     "body_stretch_b": body_stretch(1),
+    **{f"body_break_stretch_{p}": body_break_stretch(p) for p in BREAK_STRETCH},
     **{f"body_pet_{p}": body_pet(p) for p in ("lean", "side", "belly", "rub", "rest")},
     "body_puff": body_sit(puff=True),
     "body_jump": body_jump(),
@@ -776,6 +834,7 @@ LOOKS = [
     ("drowsy", "body_sit", "face_sleepy"),
     ("yarn 2", "body_sit", "face_happy", "prop_yarn_b"),
     *[(f"pet {p}", f"body_pet_{p}") for p in ("lean", "side", "belly", "rub", "rest")],
+    *[(f"break stretch {p}", f"body_break_stretch_{p}") for p in BREAK_STRETCH],
 ]
 
 

@@ -16,7 +16,7 @@ for row, lang in enumerate(("zh", "en")):
         stem = f"ota_{lang}_{state.replace(':', '_')}"
         bmp, png = OUT / (stem + ".bmp"), OUT / (stem + ".png")
         subprocess.run([str(ROOT / "build-sim/dash_sim"), "--fixture", str(ROOT / "fixtures/1_ok.json"),
-                        "--shot", str(bmp), "--scale", "1", "--ota", state, "--lang", lang, "--page", "7", "--ms", "300"],
+                        "--shot", str(bmp), "--scale", "1", "--ota", state, "--lang", lang, "--tool", "calendar", "--ms", "300"],
                        cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
         im = Image.open(bmp).convert("RGB")
         im.save(png)

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Render simulator screenshots into shots/ plus contact sheets (shots/sheet_*.png):
-#   sheet_pages_zh / _en   the 9 pages
+#   sheet_pages_zh / _en   the 7 outer pages
+#   sheet_tools           the 4 tools in both languages
 #   sheet_routine          Kiki through the day (every activity)
 #   sheet_reactions        CI pass / fail / start, server down / up, Muse, touch, morning
 #   sheet_moods            worried / nervous / confused, night, offline, boot
 #   sheet_details          failures, Mi Home notices, Kiki's diary, knob toasts
+#   sheet_sit              LD2402 stretch reminder in the room and on another page
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SIM="$ROOT/build-sim/dash_sim"
@@ -22,13 +24,15 @@ shot() { # name, args...
 }
 
 for lang in zh en; do
-  for page in 0 1 2 3 4 5 6 7 8; do
+  for page in 0 1 2 3 4 5 6; do
     fixture="$FX/1_ok.json"
     if [ "$page" = 6 ]; then fixture="$FX/10_flights_multi.json"; fi
-    if [ "$page" = 7 ]; then fixture="$FX/16_calendar.json"; fi
-    if [ "$page" = 8 ]; then fixture="$FX/20_health.json"; fi
     shot "page_${lang}_$page" --fixture "$fixture" --page "$page" --lang "$lang"
   done
+  shot "tool_pomodoro_$lang" --fixture "$FX/1_ok.json" --tool pomodoro --lang "$lang"
+  shot "tool_calendar_$lang" --fixture "$FX/16_calendar.json" --tool calendar --lang "$lang"
+  shot "tool_sit_$lang" --fixture "$FX/23_sit.json" --tool sit --lang "$lang"
+  shot "tool_health_$lang" --fixture "$FX/20_health.json" --tool health --lang "$lang"
 done
 acts=(sleep exercise breakfast class lunch nap code dinner free wash sunbathe)
 for i in "${!acts[@]}"; do
@@ -50,17 +54,23 @@ shot "det_gh_jobs" --fixture "$FX/2_gh_failed.json" --page 1 --swipe 'tap:200,99
 shot "det_gh_steps" --fixture "$FX/2_gh_failed.json" --page 1 --swipe 'tap:200,99,1;tap:182,148,1'
 shot "det_srv_down" --fixture "$FX/4_server_down.json" --page 2
 shot "det_mail" --fixture "$FX/8_muse_sensor.json" --page 4
+shot "det_iphone_popup" --fixture "$FX/1_ok.json" --iphone "A note from my phone"
+shot "det_iphone_mail" --fixture "$FX/8_muse_sensor.json" --page 4 --iphone "A note from my phone" --ms 6300
 shot "det_mi_done" --fixture "$FX/1_ok.json" --page 5 --mi-done
 shot "det_mi_none" --fixture "$FX/2_gh_failed.json" --page 5 --lang en
 shot "det_diary_zh" --fixture "$FX/1_ok.json" --page 4 --diary day
 shot "det_weekly_en" --fixture "$FX/1_ok.json" --page 4 --diary week --lang en
 shot "det_knob_bri" --fixture "$FX/1_ok.json" --page 5 --knob turn:3
-shot "det_knob_pomo" --fixture "$FX/1_ok.json" --page 3 --knob long --lang en
-shot "det_knob_duration" --fixture "$FX/1_ok.json" --page 3 --knob turn:2
-shot "det_knob_next" --fixture "$FX/1_ok.json" --page 3 --knob 'click;turn:2' --lang en
+shot "det_knob_pomo" --fixture "$FX/1_ok.json" --tool pomodoro --knob long --lang en
+shot "det_knob_duration" --fixture "$FX/1_ok.json" --tool pomodoro --knob turn:2
+shot "det_knob_next" --fixture "$FX/1_ok.json" --tool pomodoro --knob 'click;turn:2' --lang en
 shot "det_knob_mail" --fixture "$FX/8_muse_sensor.json" --page 4 --knob turn:5
 shot "det_knob_flight" --fixture "$FX/10_flights_multi.json" --page 6 --knob turn:1
-shot "det_knob_health" --fixture "$FX/20_health.json" --page 8 --knob turn:1
+shot "det_knob_health" --fixture "$FX/20_health.json" --tool health --knob turn:1
+for lang in zh en; do
+  shot "sit_home_$lang" --fixture "$FX/1_ok.json" --lang "$lang" --sit-demo --ms 850
+  shot "sit_card_$lang" --fixture "$FX/1_ok.json" --page 3 --lang "$lang" --sit-demo --ms 850
+done
 shot "flight_day" --fixture "$FX/9_flight.json" --flyover --ms 2400
 shot "flight_night" --fixture "$FX/9_flight.json" --flyover --night --ms 2400
 shot "flight_notice" --fixture "$FX/9_flight.json" --flyover --ms 6500
@@ -68,16 +78,16 @@ shot "flight_unknown" --fixture "$FX/12_flights_unknown.json" --page 6
 shot "flight_empty" --fixture "$FX/11_flights_empty.json" --page 6
 shot "flight_stale" --fixture "$FX/13_flights_stale.json" --page 6
 shot "flight_error" --fixture "$FX/14_flights_error.json" --page 6
-shot "calendar_empty" --fixture "$FX/17_calendar_empty.json" --page 7
-shot "calendar_cached" --fixture "$FX/18_calendar_cached.json" --page 7
-shot "calendar_disabled" --fixture "$FX/19_calendar_disabled.json" --page 7 --lang en
-shot "health_sleep" --fixture "$FX/20_health.json" --page 8 --swipe "tap:120,69,1"
-shot "health_body" --fixture "$FX/20_health.json" --page 8 --swipe "tap:195,69,1"
-shot "health_sleep_en" --fixture "$FX/20_health.json" --page 8 --lang en --swipe "tap:120,69,1"
-shot "health_body_en" --fixture "$FX/20_health.json" --page 8 --lang en --swipe "tap:195,69,1"
-shot "health_cached" --fixture "$FX/21_health_cached.json" --page 8
-shot "health_empty" --fixture "$FX/22_health_empty.json" --page 8
-shot "health_disabled" --fixture "$FX/1_ok.json" --page 8 --lang en
+shot "calendar_empty" --fixture "$FX/17_calendar_empty.json" --tool calendar
+shot "calendar_cached" --fixture "$FX/18_calendar_cached.json" --tool calendar
+shot "calendar_disabled" --fixture "$FX/19_calendar_disabled.json" --tool calendar --lang en
+shot "health_sleep" --fixture "$FX/20_health.json" --tool health --swipe "tap:120,69,1"
+shot "health_body" --fixture "$FX/20_health.json" --tool health --swipe "tap:195,69,1"
+shot "health_sleep_en" --fixture "$FX/20_health.json" --tool health --lang en --swipe "tap:120,69,1"
+shot "health_body_en" --fixture "$FX/20_health.json" --tool health --lang en --swipe "tap:195,69,1"
+shot "health_cached" --fixture "$FX/21_health_cached.json" --tool health
+shot "health_empty" --fixture "$FX/22_health_empty.json" --tool health
+shot "health_disabled" --fixture "$FX/1_ok.json" --tool health --lang en
 python3 "$ROOT/scripts/holiday_shots.py" "$SIM" "$OUT"
 python3 "$ROOT/scripts/idle_shots.py" "$SIM" "$OUT"
 python3 "$ROOT/scripts/knob_shots.py" "$SIM" "$OUT"
@@ -105,10 +115,12 @@ def sheet(name, prefix, cols=4):
     s.save(out / f"sheet_{name}.png")
 sheet("pages_zh", "page_zh", 6)
 sheet("pages_en", "page_en", 6)
+sheet("tools", "tool_", 4)
 sheet("routine", "act_", 6)
 sheet("reactions", "react_", 4)
 sheet("moods", "mood_", 3)
 sheet("details", "det_", 3)
+sheet("sit", "sit_", 2)
 sheet("flights", "flight_", 4)
 sheet("calendar", "calendar_", 3)
 sheet("holidays", "holiday_", 4)

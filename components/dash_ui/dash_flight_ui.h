@@ -10,6 +10,7 @@ void dash_flight_ui_interrupt(void);
 void dash_flight_ui_page_changed(void);
 void dash_flight_ui_step(int delta);
 bool dash_flight_ui_scene_active(void);
+bool dash_flight_ui_alert_pending(void);
 void dash_flight_ui_debug(void);
 bool dash_ui_alert_active(void); /* queried by the animation timer, without one-second latency */
 void dash_ui_flight_bubble(bool playing);

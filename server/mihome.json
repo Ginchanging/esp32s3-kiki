@@ -9,6 +9,8 @@
     {"id": "water", "kind": "dispenser", "name_zh": "饮水机", "name_en": "Water", "status": "sensor.xiaomi_cn_918698106_tsa2p_status_p_2_3",
      "temp": "sensor.xiaomi_cn_918698106_tsa2p_temperature_p_2_5",
      "tds": "sensor.xiaomi_cn_918698106_tsa2p_tds_out_p_3_2",
-     "filters": ["sensor.xiaomi_cn_918698106_tsa2p_filter_life_level_p_5_1", "sensor.xiaomi_cn_918698106_tsa2p_filter_life_level_p_8_1"]}
+     "filters": ["sensor.xiaomi_cn_918698106_tsa2p_filter_life_level_p_5_1", "sensor.xiaomi_cn_918698106_tsa2p_filter_life_level_p_8_1"]},
+    {"id": "plug", "kind": "switch", "name_zh": "智能插座4", "name_en": "Smart Plug 4", "entity": "switch.xiaomi_cn_2277460034_04_on_p_2_1",
+     "power_w": "sensor.xiaomi_cn_2277460034_04_electric_power_p_11_2", "energy_kwh": "sensor.xiaomi_cn_2277460034_04_power_consumption_p_11_1", "protect_off": true}
   ]
 }

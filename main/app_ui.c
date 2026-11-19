@@ -29,13 +29,18 @@
 
 #define MIRROR_ROWS 8 /* rows per serial line */
 #define MIRROR_PX (DASH_UI_W * MIRROR_ROWS)
+#define MIRROR_RLE_BYTES (MIRROR_PX * 2 + MIRROR_PX / 128 + 8)
 
 static uint32_t flushes;
 static uint32_t flush_px;
 static uint32_t mirror_bytes;
 
-static uint8_t rle_buf[MIRROR_PX * 2 + MIRROR_PX / 128 + 8];
-static char line_buf[64 + ((sizeof(rle_buf) + 2) / 3) * 4 + 2];
+typedef struct {
+    uint8_t rle[MIRROR_RLE_BYTES];
+    char line[64 + ((MIRROR_RLE_BYTES + 2) / 3) * 4 + 2];
+} mirror_buffers_t;
+
+static mirror_buffers_t *mirror_buffers;
 
 static uint32_t tick_ms(void)
 {
@@ -121,6 +126,8 @@ static void mirror_send(const lv_area_t *area, const uint16_t *px)
         app_mirror_set_active(false);
         return;
     }
+    uint8_t *rle_buf = mirror_buffers->rle;
+    char *line_buf = mirror_buffers->line;
     int32_t w = lv_area_get_width(area);
     for (int32_t y = area->y1; y <= area->y2; y += MIRROR_ROWS) {
         int32_t y2 = y + MIRROR_ROWS - 1 > area->y2 ? area->y2 : y + MIRROR_ROWS - 1;
@@ -343,8 +350,17 @@ void ui_task(void *arg)
         int64_t now_ms = esp_timer_get_time() / 1000;
         bool mirror_on;
         if (app_mirror_take_request(&mirror_on)) {
-            app_mirror_set_active(mirror_on);
-            if (mirror_on) { /* send one complete frame */
+            if (mirror_on && !mirror_buffers) {
+                /* The USB driver copies these bytes into its own TX ring. */
+                mirror_buffers = heap_caps_malloc(sizeof(*mirror_buffers), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                if (!mirror_buffers) {
+                    mirror_buffers = heap_caps_malloc(sizeof(*mirror_buffers), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                }
+                if (!mirror_buffers) printf("dash: cannot allocate USB mirror buffers\n");
+            }
+            bool active = mirror_on && mirror_buffers;
+            app_mirror_set_active(active);
+            if (active) { /* send one complete frame */
                 lv_obj_invalidate(lv_screen_active());
                 lv_obj_invalidate(lv_layer_top());
             }
@@ -429,6 +445,14 @@ void ui_task(void *arg)
             s2->pomo_phase = phase;
             s2->pomo_percent = pct;
             app_unlock(false);
+
+            bool sit_demo;
+            if (dash_ui_sit_ready() && app_sit_take_reminder(&sit_demo)) {
+                dash_ui_show_sit(sit_demo);
+            }
+            dash_sit_status_t sit_status;
+            app_sit_get_status(&sit_status);
+            dash_ui_set_sit_status(&sit_status);
         }
 
         int64_t t0 = esp_timer_get_time();

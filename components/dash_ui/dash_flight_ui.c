@@ -102,7 +102,7 @@ static void open_flight(lv_event_t *e)
     fl.selected = fl.active.flight;
     fl.have_selected = fl.frozen = true;
     close_notice();
-    dash_ui_set_page(6, true);
+    dash_ui_set_page(DASH_PAGE_FLIGHTS, true);
 }
 
 static void notice(void)
@@ -145,10 +145,11 @@ void dash_flight_ui_interrupt(void)
 
 void dash_flight_ui_page_changed(void)
 {
-    if (fl.playing && dash_ui_get_page() != 0) stop_scene(true);
+    if (fl.playing && dash_ui_get_page() != DASH_PAGE_ROOM) stop_scene(true);
 }
 
 bool dash_flight_ui_scene_active(void) { return fl.playing; }
+bool dash_flight_ui_alert_pending(void) { return fl.playing || fl.notice || fl.pending_notice || fl.queued; }
 
 static void scene_sky(void)
 {
@@ -206,7 +207,7 @@ static void timer(lv_timer_t *t)
     if (dash_ui_alert_active()) { if (fl.playing || fl.notice) dash_flight_ui_interrupt(); return; }
     if ((int32_t)(lv_tick_get()-fl.block_until) < 0) return;
     if (fl.playing) {
-        if (dash_ui_get_page() != 0) { stop_scene(true); return; }
+        if (dash_ui_get_page() != DASH_PAGE_ROOM) { stop_scene(true); return; }
         uint32_t elapsed = lv_tick_get()-fl.scene_start;
         if (elapsed >= 6000) { stop_scene(true); return; }
         int x = -36 + (int)((elapsed > 500 ? elapsed-500 : 0)*312/4000);
@@ -234,7 +235,7 @@ static void timer(lv_timer_t *t)
     fl.active = fl.queue[0];
     memmove(fl.queue, fl.queue+1, (size_t)(--fl.queued)*sizeof(fl.queue[0]));
     if (now()-fl.active.at > 60) return;
-    if (dash_ui_get_page() != 0) { notice(); return; }
+    if (dash_ui_get_page() != DASH_PAGE_ROOM) { notice(); return; }
     fl.scene_start = lv_tick_get();
     fl.playing = true;
     fl.cat_look = -1;

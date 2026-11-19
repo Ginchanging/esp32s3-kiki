@@ -43,7 +43,7 @@ int main(void)
     dash_state_t state;
     dash_state_init(&state);
     state.ota = (dash_ota_status_t){DASH_OTA_DOWNLOADING, 42, 100, 0};
-    dash_ui_set_page(7, false);
+    dash_ui_open_tool(DASH_TOOL_CALENDAR);
     dash_ui_update(&state, 1794844800);
     run(100);
     assert(dash_ota_ui_active());
@@ -63,7 +63,7 @@ int main(void)
     dash_ui_set_lang(DASH_LANG_EN);
     run(100);
     assert(dash_ui_ota_countdown_visible() == 1);
-    assert(dash_ui_get_page() == 7);
+    assert(dash_ui_get_page() == DASH_PAGE_TOOLS && dash_ui_get_tool() == DASH_TOOL_CALENDAR);
     state.ota.phase = DASH_OTA_SUCCEEDED;
     dash_ui_update(&state, 1794844800);
     run(100);
@@ -75,7 +75,7 @@ int main(void)
     dash_ui_update(&state, 1794844800);
     assert(!dash_ota_ui_active()); /* terminal state cannot recreate a dismissed overlay */
     assert(!dash_ui_alert_active()); /* a finished update releases the flight/notification gate */
-    assert(dash_ui_get_page() == 7);
+    assert(dash_ui_get_page() == DASH_PAGE_TOOLS && dash_ui_get_tool() == DASH_TOOL_CALENDAR);
     state.ota.phase = DASH_OTA_FAILED;
     dash_ui_update(&state, 1794844800);
     run(100);

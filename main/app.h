@@ -7,6 +7,7 @@
 
 #include "dash_model.h"
 #include "dash_actions.h"
+#include "dash_sit.h"
 #include "esp_err.h"
 
 /* --- shared dashboard state (guarded by a mutex) --- */
@@ -18,8 +19,8 @@ bool app_take_dirty(void);
 /* LED timers live next to the state (same lock). */
 dash_led_timers_t *app_led_timers_locked(void);
 
-/* A Muse alert arrived (from MQTT or the MUSE serial command). */
-void app_muse_arrived(const char *utf8, int64_t ts);
+/* A plain-text Muse or iPhone alert arrived. */
+void app_text_alert_arrived(dash_msg_src_t src, const char *utf8, int64_t ts);
 /* An AI agent push (agentalert topic or the AGENT serial command). */
 void app_agent_arrived(const dash_muse_msg_t *m, int64_t ts);
 
@@ -116,6 +117,13 @@ void knob_task(void *arg);
 void sensor_task(void *arg);
 void app_sensor_print_status(const char *prefix);
 void app_led_print_status(const char *prefix);
+void sit_task(void *arg);
+esp_err_t app_sit_set_enabled(bool enabled);
+esp_err_t app_sit_set_range(unsigned cm);
+void app_sit_get_status(dash_sit_status_t *status);
+void app_sit_print_status(const char *prefix);
+void app_sit_request_demo(void);
+bool app_sit_take_reminder(bool *demo);
 
 /* Hub endpoint; the certificate is pinned (main/certs/hub.pem). */
 #define DASH_HUB_BASE "https://8.138.138.222:8443"
@@ -131,6 +139,7 @@ void app_led_print_status(const char *prefix);
 #define MUSE_MQTT_URI "mqtts://bemfa.com:9503" /* TLS 1.2; 9501 would send the UID in clear */
 #define MUSE_TOPIC "musealert"
 #define AGENT_TOPIC "agentalert" /* github.com/Ginchanging/agent-bemfa-notify */
+#define IPHONE_TOPIC "iPhone"
 
 #define LED_DEFAULT_GPIO 48
 /* KY-016 common cathode: photo order B / G / R / -, with - connected to GND. */

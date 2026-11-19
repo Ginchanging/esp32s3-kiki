@@ -9,6 +9,7 @@
 #include "dash_flight_ui.h"
 #include "dash_calendar_ui.h"
 #include "dash_health_ui.h"
+#include "dash_tools_ui.h"
 #include "dash_season.h"
 #include "dash_ota_ui.h"
 #include "dash_i18n.h"
@@ -27,6 +28,7 @@ LV_FONT_DECLARE(dash_font_zh20)
 #define INNER_W (DASH_UI_W - 2 * PAD)
 
 #define BREAK_MS (5 * 60 * 1000)
+#define SIT_NOTICE_MS 8000
 #define HEAT_COLS (DASH_CONTRIB_DAYS / 7)
 #define HEAT_CELL 10
 #define SPARK_W 136
@@ -59,16 +61,21 @@ typedef struct {
 
 typedef struct {
     lv_obj_t *shadow, *card, *icon, *name, *sub, *state, *btn, *btn_lbl, *bar, *left, *spark;
+    lv_obj_t *lock;
     lv_point_precise_t pts[DASH_WEIGHT_DAYS]; /* scale trend */
     int npts;
+    bool compact;
 } mi_card_t;
 
 static struct {
     lv_obj_t *scr;
     lv_obj_t *top_bar, *top_time, *top_fresh, *top_mqtt, *top_wifi, *lang_btn;
     lv_obj_t *tv, *tiles[DASH_UI_PAGES], *dots[DASH_UI_PAGES];
+    lv_obj_t *tool_menu, *tool_back, *tool_pane[DASH_TOOL_COUNT];
+    dash_tool_t tool, tool_focus;
+    dash_sit_status_t sit_status;
     /* home */
-    lv_obj_t *wall, *sky, *sun, *moon_bite, *stars[7], *date, *env, *cat_img, *bubble_text, *night_veil;
+    lv_obj_t *wall, *sky, *sun, *moon_bite, *stars[7], *date, *env, *cat_img, *bubble_name, *bubble_text, *night_veil;
     lv_obj_t *chip[4], *chip_icon[4], *chip_val[4];
     dash_pix_t clock;
     char clock_drawn[8];
@@ -97,9 +104,19 @@ static struct {
         bool active, want;
         uint32_t deadline, fail_until; /* lv_tick ms */
     } mi_pend[DASH_MAX_MI];
+    char mi_unlock_id[sizeof(((dash_mi_dev_t *)0)->id)];
+    uint32_t mi_unlock_until;
     /* popup */
     lv_obj_t *popup;
     lv_timer_t *popup_timer;
+    struct {
+        lv_timer_t *timer;
+        lv_obj_t *speech, *card;
+        dash_pix_t cat;
+        uint32_t started;
+        int look;
+        bool demo;
+    } sit;
 
     int page;
     bool have_last;
@@ -132,8 +149,11 @@ static struct {
 } pomo = {.focus_minutes = 25, .session_minutes = 25};
 
 static void knob_page_leave(void);
+static void update_mihome(const dash_state_t *st);
+static void toast(const char *text);
 static void knob_rebuild(void);
 static void action_close(void);
+static void sit_close(void);
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -276,6 +296,8 @@ static const char *src_name(uint8_t src)
         return "Codex";
     case DASH_SRC_MUSE:
         return "Muse";
+    case DASH_SRC_IPHONE:
+        return "iPhone";
     case DASH_SRC_KIKI:
         return "Kiki";
     default:
@@ -485,6 +507,7 @@ static void pomo_tick(void)
 
 static void bubble_say(const char *text, uint32_t ms)
 {
+    sit_close();
     ui.flight_bubble = false;
     snprintf(ui.bubble_override, sizeof(ui.bubble_override), "%s", text);
     ui.bubble_until = tick_now() + ms;
@@ -589,21 +612,71 @@ static void update_dots(void)
     }
 }
 
+static lv_obj_t *tool_container(lv_obj_t *parent)
+{
+    lv_obj_t *pane = box(parent, 0, 0, DASH_UI_W, TILE_H, T_BG);
+    lv_obj_set_clickable(pane, false);
+    return pane;
+}
+
+static void show_tool_view(void)
+{
+    if (ui.tool == DASH_TOOL_SIT && !ui.tool_pane[DASH_TOOL_SIT]) {
+        ui.tool_pane[DASH_TOOL_SIT] = tool_container(ui.tiles[DASH_PAGE_TOOLS]);
+        dash_sit_ui_create(ui.tool_pane[DASH_TOOL_SIT]);
+        lv_obj_move_to_index(ui.tool_back, -1);
+    } else if (ui.tool != DASH_TOOL_SIT && ui.tool_pane[DASH_TOOL_SIT]) {
+        lv_obj_delete(ui.tool_pane[DASH_TOOL_SIT]);
+        ui.tool_pane[DASH_TOOL_SIT] = NULL;
+        dash_sit_ui_destroy();
+    }
+    show(ui.tool_menu, ui.tool == DASH_TOOL_NONE);
+    show(ui.tool_back, ui.tool != DASH_TOOL_NONE);
+    for (int i = DASH_TOOL_POMODORO; i < DASH_TOOL_COUNT; ++i) {
+        if (ui.tool_pane[i]) show(ui.tool_pane[i], (int)ui.tool == i);
+    }
+    /* Keep list scrolling in the tool, and reserve horizontal tile drags for the menu. */
+    lv_obj_set_scrollable(ui.tv, ui.tool == DASH_TOOL_NONE);
+    if (ui.tool == DASH_TOOL_SIT) dash_sit_ui_update(&ui.sit_status);
+}
+
+static void select_tool(dash_tool_t tool)
+{
+    if (ui.tool == tool) return;
+    ui.tool = tool;
+    if (tool != DASH_TOOL_NONE) ui.tool_focus = tool;
+    show_tool_view();
+    dash_calendar_ui_page_changed();
+}
+
+static void root_page_changed(int page)
+{
+    if (ui.page == page) return;
+    action_close();
+    knob_page_leave();
+    if (ui.mi_unlock_id[0]) {
+        ui.mi_unlock_id[0] = '\0';
+        update_mihome(&ui.last);
+    }
+    ui.page = page;
+    if (ui.tool != DASH_TOOL_NONE) {
+        ui.tool = DASH_TOOL_NONE;
+        show_tool_view();
+    }
+    update_dots();
+    dash_flight_ui_page_changed();
+    dash_calendar_ui_page_changed();
+}
+
 static void tile_changed(lv_event_t *e)
 {
     lv_obj_t *active = lv_tileview_get_tile_active(ui.tv);
     for (int i = 0; i < DASH_UI_PAGES; ++i) {
         if (ui.tiles[i] == active) {
-            if (ui.page != i) {
-                action_close();
-                knob_page_leave();
-            }
-            ui.page = i;
+            root_page_changed(i);
+            return;
         }
     }
-    update_dots();
-    dash_flight_ui_page_changed();
-    dash_calendar_ui_page_changed();
 }
 
 static void lang_toggle_async(void *arg)
@@ -669,7 +742,13 @@ static void page_gesture(lv_event_t *e)
         return;
     }
     lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if ((ui.page == 0 && dir == LV_DIR_RIGHT) || (ui.page == DASH_UI_PAGES - 1 && dir == LV_DIR_LEFT)) {
+    if (ui.tool != DASH_TOOL_NONE) {
+        /* A horizontal drag inside a locked tile could otherwise click its row on release. */
+        if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) lv_indev_wait_release(indev);
+        return;
+    }
+    if ((ui.page == DASH_PAGE_ROOM && dir == LV_DIR_RIGHT) ||
+        (ui.page == DASH_PAGE_FLIGHTS && dir == LV_DIR_LEFT)) {
         dash_ui_step_page(dir == LV_DIR_RIGHT ? -1 : 1);
         lv_indev_wait_release(indev); /* no tap on Kiki or a button at the end of the swipe */
     }
@@ -690,11 +769,11 @@ static bool on_button(lv_obj_t *o)
 static void double_tap(lv_event_t *e)
 {
     lv_indev_t *indev = (lv_indev_t *)lv_event_get_target(e);
-    if (!ui.tv || ui.page == 0 || lv_indev_get_short_click_streak(indev) != 2 ||
+    if (!ui.tv || ui.page == DASH_PAGE_ROOM || lv_indev_get_short_click_streak(indev) != 2 ||
         on_button((lv_obj_t *)lv_event_get_param(e))) {
         return;
     }
-    dash_ui_set_page(0, ui.page == 1); /* slide back one page, jump from further away */
+    dash_ui_set_page(DASH_PAGE_ROOM, ui.page == DASH_PAGE_GITHUB); /* slide only from the adjacent tile */
 }
 
 void dash_ui_attach_indev(lv_indev_t *indev)
@@ -767,12 +846,12 @@ static void build_home(lv_obj_t *t)
     box(t, 169, 180, 6, 2, T_CARD);
     box(t, 167, 182, 10, 2, T_CARD);
     lv_obj_t *bub = card(t, PAD, 184, INNER_W, 40, T_CARD);
-    lv_obj_t *name = label(bub, &lv_font_montserrat_12, T_ACCENT, 10, 12);
-    lv_label_set_text(name, "Kiki");
+    ui.bubble_name = label(bub, &lv_font_montserrat_12, T_ACCENT, 10, 12);
+    lv_label_set_text(ui.bubble_name, "Kiki");
     ui.bubble_text = label_w(bub, &dash_font_zh16, T_TEXT, 44, 8, INNER_W - 52, LV_LABEL_LONG_MODE_DOTS);
 
     /* status chips: CI · servers · mail · Mi Home; tap = open that page */
-    static const int chip_page[4] = {1, 2, 4, 5};
+    static const dash_page_t chip_page[4] = {DASH_PAGE_GITHUB, DASH_PAGE_SERVERS, DASH_PAGE_MAIL, DASH_PAGE_MI};
     for (int i = 0; i < 4; ++i) {
         int x = PAD + i * 56;
         ui.chip[i] = card(t, x, 232, 50, 44, T_CARD);
@@ -816,20 +895,10 @@ static struct {
     bool loading;
 } action;
 
-static void outline_focus(lv_obj_t *obj, bool selected)
-{
-    int width = selected ? 1 : 0;
-    if (lv_obj_get_style_outline_width(obj, 0) != width) {
-        lv_obj_set_style_outline_width(obj, width, 0);
-    }
-}
-
 static lv_obj_t *action_card(lv_obj_t *parent, int x, int y, int w, int h)
 {
     lv_obj_t *obj = box(parent, x, y, w, h, T_CARD);
     lv_obj_set_style_radius(obj, 6, 0);
-    lv_obj_set_style_outline_color(obj, hex(T_ACCENT), 0);
-    lv_obj_set_style_outline_pad(obj, -1, 0);
     return obj;
 }
 
@@ -839,12 +908,6 @@ static void action_close(void)
     lv_obj_delete(action.panel);
     action.panel = NULL;
     if (action_request_cb) action_request_cb(NULL);
-}
-
-static void action_focus(int focus)
-{
-    action.focus = focus;
-    for (int i = 0; i < ACTION_CONTROL_COUNT; ++i) outline_focus(action.controls[i], focus == i);
 }
 
 static void action_header(void)
@@ -914,7 +977,7 @@ static void action_render(const dash_action_page_t *page)
         int row = restored >= 0 ? restored : first_failure >= 0 ? first_failure : 0;
         focus = steps ? ACTION_BACK : ACTION_FIRST_ROW + row;
     }
-    action_focus(focus);
+    action.focus = focus;
 }
 
 void dash_ui_action_reply(uint32_t seq, const dash_action_page_t *page)
@@ -1022,13 +1085,12 @@ static int github_index(const dash_state_t *st, int64_t id)
 static void github_focus(int index, bool reveal)
 {
     ui.gh_selected = index >= 0 ? ui.last.runs[index].id : 0;
-    for (int i = 0; i < DASH_MAX_RUNS; ++i) outline_focus(ui.runs[i].row, i == index);
     if (reveal && index >= 0) lv_obj_scroll_to_view(ui.runs[index].row, LV_ANIM_OFF);
 }
 
 static void github_open(int index)
 {
-    if (ui.page != 1 || action.panel || dash_ota_ui_active() || !ui.last.have_hub ||
+    if (ui.page != DASH_PAGE_GITHUB || action.panel || dash_ota_ui_active() || !ui.last.have_hub ||
         index < 0 || index >= ui.last.run_count) return;
     const dash_run_t *run = &ui.last.runs[index];
     if (run->id <= 0 || run->attempt <= 0) return;
@@ -1057,7 +1119,7 @@ static void github_turn(int steps)
                 focus = i;
             }
         }
-        action_focus(focus);
+        action.focus = focus;
     } else if (ui.last.have_hub && ui.last.run_count) {
         int index = github_index(&ui.last, ui.gh_selected);
         int64_t target = (index < 0 ? 0 : index) + (int64_t)steps;
@@ -1165,7 +1227,7 @@ static void pomo_btn(lv_event_t *e)
 
 static void build_pomodoro(lv_obj_t *t)
 {
-    lv_label_set_text(label(t, F.title, T_TEXT, PAD, 2), dash_tr(S_POMO_TITLE));
+    lv_label_set_text(label(t, F.title, T_TEXT, DASH_TOOL_TITLE_X, 2), dash_tr(S_POMO_TITLE));
     ui.pomo_arc = lv_arc_create(t);
     lv_obj_set_size(ui.pomo_arc, 160, 160);
     lv_obj_set_pos(ui.pomo_arc, 40, 30);
@@ -1255,19 +1317,38 @@ static void build_mail(lv_obj_t *t)
 #define MI_Y0 34
 #define MI_H 54
 #define MI_GAP 8
+#define MI_LOCK_X (INNER_W - 84)
+#define MI_COMPACT_Y 4
+#define MI_COMPACT_H 26
+#define MI_UNLOCK_MS 5000
 
-static void update_mihome(const dash_state_t *st);
+static bool mi_needs_unlock(const dash_mi_dev_t *d)
+{
+    return d->kind == DASH_MI_SWITCH && d->protect_off && d->on;
+}
 
-/* Toggle lamp/switch i (card button or knob click). False if it cannot be switched now. */
-static bool mi_toggle(int i)
+static bool mi_is_unlocked(const dash_mi_dev_t *d)
+{
+    return ui.mi_unlock_id[0] && !strcmp(ui.mi_unlock_id, d->id) &&
+           (int32_t)(tick_now() - ui.mi_unlock_until) < 0;
+}
+
+typedef enum { MI_TOGGLE_UNAVAILABLE, MI_TOGGLE_SENT, MI_TOGGLE_LOCKED } mi_toggle_t;
+
+/* Shared by the card button and knob click. */
+static mi_toggle_t mi_toggle(int i)
 {
     if (i < 0 || i >= ui.last.mi_count || ui.mi_pend[i].active) {
-        return false;
+        return MI_TOGGLE_UNAVAILABLE;
     }
     const dash_mi_dev_t *d = &ui.last.mi[i];
     if (!ui.last.mi_ok || !d->online || (d->kind != DASH_MI_LAMP && d->kind != DASH_MI_SWITCH)) {
-        return false;
+        return MI_TOGGLE_UNAVAILABLE;
     }
+    if (mi_needs_unlock(d) && !mi_is_unlocked(d)) {
+        return MI_TOGGLE_LOCKED;
+    }
+    ui.mi_unlock_id[0] = '\0';
     ui.mi_pend[i].active = true;
     ui.mi_pend[i].want = !d->on;
     ui.mi_pend[i].deadline = tick_now() + 12000;
@@ -1276,12 +1357,88 @@ static bool mi_toggle(int i)
         ui.mi_cb(d->id, !d->on, -1);
     }
     update_mihome(&ui.last);
-    return true;
+    return MI_TOGGLE_SENT;
 }
 
 static void mi_btn_clicked(lv_event_t *e)
 {
-    mi_toggle((int)(intptr_t)lv_event_get_user_data(e));
+    if (mi_toggle((int)(intptr_t)lv_event_get_user_data(e)) == MI_TOGGLE_LOCKED) {
+        toast(dash_tr(S_MI_UNLOCK_FIRST));
+    }
+}
+
+static void mi_lock_clicked(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (ui.page != DASH_PAGE_MI || !ui.last.mi_ok || i < 0 || i >= ui.last.mi_count || ui.mi_pend[i].active) {
+        return;
+    }
+    const dash_mi_dev_t *d = &ui.last.mi[i];
+    if (!d->online || !mi_needs_unlock(d)) {
+        return;
+    }
+    if (mi_is_unlocked(d)) {
+        ui.mi_unlock_id[0] = '\0';
+    } else {
+        snprintf(ui.mi_unlock_id, sizeof(ui.mi_unlock_id), "%s", d->id);
+        ui.mi_unlock_until = tick_now() + MI_UNLOCK_MS;
+    }
+    update_mihome(&ui.last);
+}
+
+static void mi_lock_draw(lv_event_t *e)
+{
+    lv_obj_t *lock = lv_event_get_target(e);
+    lv_layer_t *layer = lv_event_get_layer(e);
+    bool open = lv_obj_has_state(lock, LV_STATE_USER_1);
+    lv_area_t bounds;
+    lv_obj_get_coords(lock, &bounds);
+    int32_t x = (bounds.x1 + bounds.x2) / 2;
+    int32_t y = (bounds.y1 + bounds.y2) / 2;
+    lv_color_t ink = hex(open ? T_BG : T_TEXT);
+    lv_draw_rect_dsc_t rect;
+    lv_draw_rect_dsc_init(&rect);
+    rect.bg_opa = LV_OPA_TRANSP;
+    rect.border_color = ink;
+    rect.border_width = 2;
+    rect.radius = 4;
+    lv_area_t shackle = open ? (lv_area_t){x - 1, y - 8, x + 7, y - 1}
+                             : (lv_area_t){x - 4, y - 8, x + 4, y + 3};
+    lv_draw_rect(layer, &rect, &shackle);
+    rect.bg_color = ink;
+    rect.bg_opa = LV_OPA_COVER;
+    rect.border_width = 0;
+    rect.radius = 2;
+    lv_area_t body = {x - 6, y - 1, x + 6, y + 7};
+    lv_draw_rect(layer, &rect, &body);
+}
+
+static void mi_update_lock(mi_card_t *c, int i, bool guarded, bool unlocked)
+{
+    if (guarded && !c->lock) {
+        c->lock = box(c->card, MI_LOCK_X, MI_COMPACT_Y, 24, MI_COMPACT_H, T_LINE);
+        lv_obj_set_style_radius(c->lock, 7, 0);
+        lv_obj_set_clickable(c->lock, true);
+        lv_obj_set_ext_click_area(c->lock, 2);
+        lv_obj_add_event_cb(c->lock, mi_lock_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(c->lock, mi_lock_draw, LV_EVENT_DRAW_MAIN, NULL);
+    }
+    if (c->lock) {
+        show(c->lock, guarded);
+        lv_obj_set_state(c->lock, LV_STATE_USER_1, unlocked);
+        set_color(c->lock, unlocked ? T_GOOD : T_LINE);
+    }
+}
+
+static void mi_compact_controls(mi_card_t *c, bool compact)
+{
+    if (c->compact == compact) return;
+    c->compact = compact;
+    lv_obj_set_pos(c->btn, INNER_W - (compact ? 56 : 64), compact ? MI_COMPACT_Y : 11);
+    lv_obj_set_size(c->btn, compact ? 46 : 54, compact ? MI_COMPACT_H : 32);
+    lv_obj_set_ext_click_area(c->btn, compact ? 2 : 8);
+    lv_obj_set_width(c->name, compact ? MI_LOCK_X - 40 : 100);
+    lv_obj_set_width(c->sub, compact ? INNER_W - 50 : 110);
 }
 
 static void build_mihome(lv_obj_t *t)
@@ -1291,6 +1448,8 @@ static void build_mihome(lv_obj_t *t)
     lv_obj_set_style_text_align(ui.mi_status, LV_TEXT_ALIGN_RIGHT, 0);
     for (int i = 0; i < DASH_MAX_MI; ++i) {
         mi_card_t *c = &ui.mi[i];
+        c->lock = NULL;
+        c->compact = false;
         int32_t y = MI_Y0 + i * (MI_H + MI_GAP);
         c->shadow = box(t, PAD + 2, y + 2, INNER_W, MI_H, T_SHADOW);
         lv_obj_set_style_radius(c->shadow, T_RADIUS, 0);
@@ -1340,6 +1499,8 @@ static void build_mihome(lv_obj_t *t)
 static void destroy_pix(void)
 {
     action_close();
+    dash_tools_ui_destroy();
+    dash_sit_ui_destroy();
     dash_health_ui_destroy();
     dash_calendar_ui_destroy();
     dash_season_destroy();
@@ -1349,6 +1510,30 @@ static void destroy_pix(void)
     dash_pix_destroy(&ui.heat);
     dash_pix_destroy(&ui.pomo_cat);
     dash_pix_destroy(&ui.pomo_time);
+}
+
+static void tool_back_clicked(lv_event_t *e)
+{
+    if (!dash_ota_ui_active()) select_tool(DASH_TOOL_NONE);
+}
+
+static void build_tools(lv_obj_t *parent)
+{
+    ui.tool_menu = tool_container(parent);
+    dash_tools_ui_create(ui.tool_menu);
+    ui.tool_pane[DASH_TOOL_SIT] = NULL; /* allocate the live readout only while visible */
+    build_pomodoro(ui.tool_pane[DASH_TOOL_POMODORO] = tool_container(parent));
+    dash_calendar_ui_create(ui.tool_pane[DASH_TOOL_CALENDAR] = tool_container(parent));
+    dash_health_ui_create(ui.tool_pane[DASH_TOOL_HEALTH] = tool_container(parent));
+    lv_obj_t *b = ui.tool_back = box(parent, 10, 1, 32, 25, T_CARD);
+    lv_obj_set_style_radius(b, 5, 0);
+    lv_obj_set_style_bg_color(b, hex(T_LINE), LV_STATE_PRESSED);
+    lv_obj_set_clickable(b, true);
+    lv_obj_set_ext_click_area(b, 4);
+    lv_obj_add_event_cb(b, tool_back_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *arrow = label(b, F.icon, T_ACCENT, 0, 0);
+    lv_label_set_text(arrow, LV_SYMBOL_LEFT);
+    lv_obj_center(arrow);
 }
 
 static void build(void)
@@ -1370,22 +1555,20 @@ static void build(void)
     lv_obj_set_style_bg_opa(ui.tv, LV_OPA_TRANSP, 0);
     lv_obj_set_scrollbar_mode(ui.tv, LV_SCROLLBAR_MODE_OFF);
     for (int i = 0; i < DASH_UI_PAGES; ++i) {
-        lv_dir_t dir = i == 0                   ? LV_DIR_RIGHT
-                       : i == DASH_UI_PAGES - 1 ? LV_DIR_LEFT
+        lv_dir_t dir = i == DASH_PAGE_ROOM    ? LV_DIR_RIGHT
+                       : i == DASH_PAGE_FLIGHTS ? LV_DIR_LEFT
                                                 : (lv_dir_t)(LV_DIR_LEFT | LV_DIR_RIGHT);
         ui.tiles[i] = lv_tileview_add_tile(ui.tv, (uint8_t)i, 0, dir);
         lv_obj_set_scrollable(ui.tiles[i], false);
     }
     lv_obj_add_event_cb(ui.tv, tile_changed, LV_EVENT_VALUE_CHANGED, NULL);
-    build_home(ui.tiles[0]);
-    build_github(ui.tiles[1]);
-    build_servers(ui.tiles[2]);
-    build_pomodoro(ui.tiles[3]);
-    build_mail(ui.tiles[4]);
-    build_mihome(ui.tiles[5]);
-    dash_flight_ui_create(ui.tiles[6], ui.tiles[0]);
-    dash_calendar_ui_create(ui.tiles[7]);
-    dash_health_ui_create(ui.tiles[8]);
+    build_home(ui.tiles[DASH_PAGE_ROOM]);
+    build_github(ui.tiles[DASH_PAGE_GITHUB]);
+    build_servers(ui.tiles[DASH_PAGE_SERVERS]);
+    build_tools(ui.tiles[DASH_PAGE_TOOLS]);
+    build_mail(ui.tiles[DASH_PAGE_MAIL]);
+    build_mihome(ui.tiles[DASH_PAGE_MI]);
+    dash_flight_ui_create(ui.tiles[DASH_PAGE_FLIGHTS], ui.tiles[DASH_PAGE_ROOM]);
     lv_obj_move_to_index(ui.night_veil, -1); /* the outdoor scene follows the same night dimming */
 
     lv_obj_t *dots = lv_obj_create(scr);
@@ -1402,11 +1585,14 @@ static void build(void)
         lv_obj_set_style_bg_opa(ui.dots[i], LV_OPA_COVER, 0);
     }
     lv_tileview_set_tile_by_index(ui.tv, (uint32_t)ui.page, 0, LV_ANIM_OFF);
+    show_tool_view();
     update_dots();
 }
 
 static void rebuild(void)
 {
+    ui.mi_unlock_id[0] = '\0';
+    sit_close();
     knob_rebuild();
     lv_obj_t *old = ui.scr;
     if (ui.popup_timer) {
@@ -2036,10 +2222,23 @@ static void update_mi_scale(mi_card_t *c, const dash_mi_dev_t *d, const dash_sta
     update_weight_spark(c, st);
 }
 
+static void mi_meter_text(char *buf, size_t len, const dash_mi_dev_t *d)
+{
+    char power[16] = "--", energy[16] = "--";
+    if (d->power_dw >= 0) {
+        snprintf(power, sizeof(power), d->power_dw % 10 ? "%.1f" : "%.0f", d->power_dw / 10.0);
+    }
+    if (d->energy_wh >= 0) {
+        snprintf(energy, sizeof(energy), d->energy_wh % 10 ? "%.3f" : "%.2f", d->energy_wh / 1000.0);
+    }
+    snprintf(buf, len, dash_tr(S_MI_METER_FMT), power, energy);
+}
+
 static void update_mihome(const dash_state_t *st)
 {
-    char buf[48];
+    char buf[64];
     uint32_t now = tick_now();
+    bool keep_unlock = false;
     set_text(ui.mi_status, !st->have_mi ? "" : st->mi_ok ? dash_tr(S_MI_LINKED) : dash_tr(S_MI_LOST));
     set_text_color(ui.mi_status, st->mi_ok ? T_GOOD : T_BAD);
     show(ui.mi_empty, !st->have_mi || st->mi_count == 0);
@@ -2056,6 +2255,11 @@ static void update_mihome(const dash_state_t *st)
         const dash_mi_dev_t *d = &st->mi[i];
         bool online = st->mi_ok && d->online;
         bool washer = d->kind == DASH_MI_WASHER;
+        bool guarded = online && mi_needs_unlock(d);
+        bool unlocked = guarded && mi_is_unlocked(d);
+        keep_unlock |= unlocked;
+        mi_compact_controls(c, d->metered || d->protect_off);
+        mi_update_lock(c, i, guarded, unlocked);
         set_text(c->name, mi_name(d));
         set_text_color(c->name, online ? T_TEXT : T_MUTED);
         if (d->kind == DASH_MI_DISPENSER || d->kind == DASH_MI_SCALE) {
@@ -2125,6 +2329,9 @@ static void update_mihome(const dash_state_t *st)
             set_text(c->sub, dash_tr(S_MI_OFFLINE));
         } else if (failed) {
             set_text(c->sub, dash_tr(S_MI_FAILED));
+        } else if (d->metered) {
+            mi_meter_text(buf, sizeof(buf), d);
+            set_text(c->sub, buf);
         } else if (d->on && d->bri >= 0) {
             snprintf(buf, sizeof(buf), dash_tr(S_MI_BRI_FMT), d->bri);
             set_text(c->sub, buf);
@@ -2132,10 +2339,12 @@ static void update_mihome(const dash_state_t *st)
             set_text(c->sub, dash_tr(d->on ? S_MI_IS_ON : S_MI_IS_OFF));
         }
         set_text_color(c->sub, failed ? T_BAD : T_MUTED);
-        set_color(c->btn, pending ? T_WARN : online && d->on ? T_ACCENT : T_LINE);
+        bool active = online && d->on && (!guarded || unlocked);
+        set_color(c->btn, pending ? T_WARN : active ? T_ACCENT : T_LINE);
         set_text(c->btn_lbl, pending ? "..." : !online ? "--" : dash_tr(d->on ? S_MI_ON : S_MI_OFF));
-        set_text_color(c->btn_lbl, pending || (online && d->on) ? T_BG : online ? T_TEXT : T_MUTED);
+        set_text_color(c->btn_lbl, pending || active ? T_BG : online ? T_TEXT : T_MUTED);
     }
+    if (!keep_unlock) ui.mi_unlock_id[0] = '\0';
 }
 
 /* ------------------------------------------------------------------ popups */
@@ -2237,10 +2446,106 @@ static void popup_open(uint32_t color, const char *icon, const char *title, cons
     popup_open_f(color, icon, title, body, ms, F.title);
 }
 
+/* Quiet desk reminder. The room and the small card share the same animation clock. */
+static void sit_close(void)
+{
+    if (!ui.sit.timer) return;
+    lv_timer_delete(ui.sit.timer);
+    ui.sit.timer = NULL;
+    if (ui.sit.card) lv_obj_delete(ui.sit.card);
+    ui.sit.card = NULL;
+    dash_pix_destroy(&ui.sit.cat);
+    lv_obj_delete(ui.sit.speech);
+    ui.sit.speech = NULL;
+    show(ui.bubble_text, true);
+    if (ui.sit.demo) {
+        lv_obj_set_style_text_font(ui.bubble_name, &lv_font_montserrat_12, 0);
+        set_text(ui.bubble_name, "Kiki");
+    }
+    dash_cat_stop_react(DASH_CAT_REACT_SIT);
+}
+
+static void sit_dismissed(lv_event_t *e)
+{
+    (void)e;
+    sit_close();
+}
+
+static void sit_open_card(void)
+{
+    const int size = DASH_SPR_W * 2;
+    lv_obj_t *c = box(lv_layer_top(), PAD, DASH_UI_H - DOTS_H - 88, INNER_W, 80, T_CARD);
+    lv_obj_set_style_radius(c, T_RADIUS, 0);
+    lv_obj_set_style_outline_width(c, 2, 0);
+    lv_obj_set_style_outline_color(c, hex(T_SHADOW), 0);
+    lv_obj_set_clickable(c, true);
+    lv_obj_add_event_cb(c, sit_dismissed, LV_EVENT_CLICKED, NULL);
+    bool have_cat = dash_pix_create(&ui.sit.cat, c, size, size);
+    if (have_cat) lv_obj_set_pos(ui.sit.cat.img, 6, 8);
+    int x = have_cat ? size + 12 : 12;
+    lv_obj_t *title = label(c, F.small, T_ACCENT, x, 9);
+    lv_label_set_text(title, ui.sit.demo ? dash_tr(S_SIT_DEMO) : "Kiki");
+    lv_obj_t *body = label_w(c, F.body, T_TEXT, x, 26, INNER_W - x - 8, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_line_space(body, -2, 0);
+    lv_label_set_text(body, dash_tr(S_SIT_TEXT));
+    ui.sit.card = c;
+}
+
+static void sit_tick(lv_timer_t *timer)
+{
+    (void)timer;
+    uint32_t elapsed = tick_now() - ui.sit.started;
+    if (elapsed >= SIT_NOTICE_MS || dash_ui_alert_active() || dash_flight_ui_alert_pending()) {
+        sit_close();
+        return;
+    }
+    if (ui.page == DASH_PAGE_ROOM) {
+        if (ui.sit.card) show(ui.sit.card, false);
+        return;
+    }
+    if (!ui.sit.card) sit_open_card();
+    show(ui.sit.card, true);
+    int look = dash_cat_sit_look(elapsed);
+    if (ui.sit.cat.px && look != ui.sit.look) {
+        ui.sit.look = look;
+        dash_pix_clear(&ui.sit.cat, 0);
+        dash_cat_draw_look_into(&ui.sit.cat, look, 0, 0, 2);
+        dash_pix_commit(&ui.sit.cat);
+    }
+}
+
+bool dash_ui_sit_ready(void)
+{
+    return ui.scr && !ui.sit.timer && !dash_ui_alert_active() && !dash_flight_ui_alert_pending();
+}
+
+void dash_ui_show_sit(bool demo)
+{
+    if (!dash_ui_sit_ready()) return;
+    ui.sit.timer = lv_timer_create(sit_tick, 50, NULL);
+    if (!ui.sit.timer) return;
+    ui.sit.demo = demo;
+    ui.sit.look = -1;
+    ui.sit.started = tick_now();
+    lv_obj_t *speech = label_w(lv_obj_get_parent(ui.bubble_text), F.body, T_TEXT, 50, 2,
+                               INNER_W - 58, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_line_space(speech, -2, 0);
+    lv_label_set_text(speech, dash_tr(S_SIT_TEXT));
+    ui.sit.speech = speech;
+    show(ui.bubble_text, false);
+    if (demo) {
+        lv_obj_set_style_text_font(ui.bubble_name, F.small, 0);
+        set_text(ui.bubble_name, dash_tr(S_SIT_DEMO));
+    }
+    dash_cat_react(DASH_CAT_REACT_SIT);
+    sit_tick(ui.sit.timer);
+}
+
 /* ------------------------------------------------------------------ API */
 
 void dash_ui_create(lv_display_t *disp, dash_lang_t lang)
 {
+    sit_close();
     action_close();
     knob_rebuild();
     dash_ui_lang_cb_t lcb = ui.lang_cb;
@@ -2248,6 +2553,8 @@ void dash_ui_create(lv_display_t *disp, dash_lang_t lang)
     dash_ui_mi_cb_t mcb = ui.mi_cb;
     memset(&ui, 0, sizeof(ui));
     ui.debug_activity = ui.debug_night = ui.last_activity = -1;
+    ui.tool_focus = DASH_TOOL_POMODORO;
+    ui.sit_status = (dash_sit_status_t){.enabled = true, .range_cm = DASH_SIT_RANGE_CM};
     ui.lang_cb = lcb;
     ui.pomo_cb = pcb;
     ui.mi_cb = mcb;
@@ -2284,12 +2591,12 @@ void dash_ui_update(const dash_state_t *st, int64_t now)
     if (ui.debug_night == 1) sky_now += (23 - ((sky_now + DASH_TZ_OFFSET_S)/3600)%24)*3600;
     dash_ota_ui_update(&st->ota);
     if (dash_ota_ui_active()) {
+        sit_close();
         action_close();
         ui.wake_until = tick_now() + 10000;
         dash_flight_ui_interrupt();
     }
-    dash_flight_ui_update(&ui.last.flights, now, sky_now,
-                          ui.popup != NULL || dash_cat_reacting() != DASH_CAT_REACT_NONE || dash_ota_ui_active());
+    dash_flight_ui_update(&ui.last.flights, now, sky_now, dash_ui_alert_active());
 }
 
 void dash_ui_on_event(const dash_event_t *e)
@@ -2324,7 +2631,7 @@ void dash_ui_on_event(const dash_event_t *e)
     }
     dash_cat_react(r);
     bubble_say(buf, 8000);
-    if (ui.page != 0) {
+    if (ui.page != DASH_PAGE_ROOM) {
         uint32_t color = e->level == DASH_EVT_ERROR ? T_BAD : e->level == DASH_EVT_SUCCESS ? T_GOOD : T_INFO;
         const char *icon = e->level == DASH_EVT_ERROR     ? LV_SYMBOL_WARNING
                            : e->level == DASH_EVT_SUCCESS ? LV_SYMBOL_OK
@@ -2353,7 +2660,8 @@ void dash_ui_show_agent(const dash_muse_msg_t *m, uint32_t ms)
     dash_flight_ui_interrupt();
     char title[64], bubble[DASH_MUSE_TEXT + 32];
     agent_title(m, title, sizeof(title));
-    dash_cat_react(m->kind == DASH_MSG_DONE        ? DASH_CAT_REACT_CI_PASS
+    dash_cat_react(m->src == DASH_SRC_IPHONE       ? DASH_CAT_REACT_MUSE
+                   : m->kind == DASH_MSG_DONE      ? DASH_CAT_REACT_CI_PASS
                    : m->kind == DASH_MSG_ATTENTION ? DASH_CAT_REACT_CI_START
                    : m->kind == DASH_MSG_ERROR     ? DASH_CAT_REACT_CI_FAIL
                                                    : DASH_CAT_REACT_TOUCH);
@@ -2385,18 +2693,12 @@ void dash_ui_set_lang_cb(dash_ui_lang_cb_t cb)
 
 void dash_ui_set_page(int page, bool anim)
 {
-    if (page < 0 || page >= DASH_UI_PAGES) {
+    if (!ui.tv || page < 0 || page >= DASH_UI_PAGES) {
         return;
     }
-    if (ui.page != page) {
-        action_close();
-        knob_page_leave();
-    }
-    ui.page = page;
-    dash_flight_ui_page_changed();
-    dash_calendar_ui_page_changed();
+    if (ui.page == page) select_tool(DASH_TOOL_NONE);
+    else root_page_changed(page);
     lv_tileview_set_tile_by_index(ui.tv, (uint32_t)page, 0, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    update_dots();
 }
 
 void dash_ui_step_page(int delta)
@@ -2413,6 +2715,24 @@ void dash_ui_step_page(int delta)
 int dash_ui_get_page(void)
 {
     return ui.page;
+}
+
+void dash_ui_open_tool(dash_tool_t tool)
+{
+    if (!ui.tv || tool <= DASH_TOOL_NONE || tool >= DASH_TOOL_COUNT || dash_ota_ui_active()) return;
+    if (ui.page != DASH_PAGE_TOOLS) dash_ui_set_page(DASH_PAGE_TOOLS, false);
+    select_tool(tool);
+}
+
+dash_tool_t dash_ui_get_tool(void)
+{
+    return ui.tool;
+}
+
+void dash_ui_set_sit_status(const dash_sit_status_t *status)
+{
+    ui.sit_status = *status;
+    if (ui.tool == DASH_TOOL_SIT) dash_sit_ui_update(&ui.sit_status);
 }
 
 void dash_ui_set_pomo_cb(dash_ui_pomo_cb_t cb)
@@ -2798,13 +3118,20 @@ void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
     case DASH_KNOB_TURN:
         if (!steps) break;
         switch (ui.page) {
-        case 0: pet_turn(steps, at_ms); break;
-        case 1: github_turn(steps); break;
-        case 3: pomo_duration_turn(steps); break;
-        case 4: mail_turn(steps); break;
-        case 5: knob_bri_turn(steps); break;
-        case 6: dash_flight_ui_step(steps); break;
-        case 8: dash_health_ui_step(steps); break;
+        case DASH_PAGE_ROOM: pet_turn(steps, at_ms); break;
+        case DASH_PAGE_GITHUB: github_turn(steps); break;
+        case DASH_PAGE_TOOLS:
+            if (ui.tool == DASH_TOOL_POMODORO) pomo_duration_turn(steps);
+            else if (ui.tool == DASH_TOOL_HEALTH) dash_health_ui_step(steps);
+            else if (ui.tool == DASH_TOOL_NONE) {
+                int count = DASH_TOOL_COUNT - DASH_TOOL_POMODORO;
+                int index = (int)ui.tool_focus - DASH_TOOL_POMODORO;
+                ui.tool_focus = (dash_tool_t)(DASH_TOOL_POMODORO + (index + steps % count + count) % count);
+            }
+            break;
+        case DASH_PAGE_MAIL: mail_turn(steps); break;
+        case DASH_PAGE_MI: knob_bri_turn(steps); break;
+        case DASH_PAGE_FLIGHTS: dash_flight_ui_step(steps); break;
         default: dash_ui_step_page(steps); break;
         }
         break;
@@ -2817,25 +3144,27 @@ void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
         break;
     case DASH_KNOB_CLICK: {
         knob_bri_commit();
-        if (ui.page == 0) {
+        if (ui.page == DASH_PAGE_ROOM) {
             if (!ui.popup && !dash_flight_ui_scene_active() && dash_cat_reacting() == DASH_CAT_REACT_NONE) {
                 dash_cat_react(DASH_CAT_REACT_TOUCH);
                 touch_report();
             }
             break;
         }
-        if (ui.page == 1) {
+        if (ui.page == DASH_PAGE_GITHUB) {
             if (action.panel) action_activate(action.focus);
             else github_open(github_index(&ui.last, ui.gh_selected));
             break;
         }
-        if (ui.page == 3) {
-            dash_ui_pomo_toggle();
+        if (ui.page == DASH_PAGE_TOOLS) {
+            if (ui.tool == DASH_TOOL_NONE) dash_ui_open_tool(ui.tool_focus);
+            else if (ui.tool == DASH_TOOL_POMODORO) dash_ui_pomo_toggle();
+            else select_tool(DASH_TOOL_NONE);
             break;
         }
-        if (ui.page != 5) {
-            toast(dash_tr(ui.page == 4 ? S_KNOB_MAIL_HINT : ui.page == 6 ? S_KNOB_FLIGHT_HINT
-                          : ui.page == 8 ? S_KNOB_HEALTH_HINT : S_KNOB_PAGE_HINT));
+        if (ui.page != DASH_PAGE_MI) {
+            toast(dash_tr(ui.page == DASH_PAGE_MAIL ? S_KNOB_MAIL_HINT :
+                          ui.page == DASH_PAGE_FLIGHTS ? S_KNOB_FLIGHT_HINT : S_KNOB_PAGE_HINT));
             break;
         }
         int i = knob_lamp();
@@ -2845,7 +3174,12 @@ void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
         }
         const dash_mi_dev_t *d = &ui.last.mi[i];
         bool will_on = !d->on;
-        if (mi_toggle(i)) {
+        mi_toggle_t result = mi_toggle(i);
+        if (result == MI_TOGGLE_LOCKED) {
+            toast(dash_tr(S_MI_UNLOCK_FIRST));
+            break;
+        }
+        if (result == MI_TOGGLE_SENT) {
             snprintf(buf, sizeof(buf), dash_tr(S_KNOB_LAMP_FMT), mi_name(d), dash_tr(will_on ? S_MI_ON : S_MI_OFF));
         } else {
             snprintf(buf, sizeof(buf), dash_tr(S_KNOB_LAMP_FMT), mi_name(d),
@@ -2936,7 +3270,8 @@ void dash_ui_debug_flyover(void)
 
 bool dash_ui_alert_active(void)
 {
-    return ui.popup != NULL || dash_cat_reacting() != DASH_CAT_REACT_NONE || dash_ota_ui_active();
+    dash_cat_react_t reaction = dash_cat_reacting();
+    return ui.popup || (reaction != DASH_CAT_REACT_NONE && reaction != DASH_CAT_REACT_SIT) || dash_ota_ui_active();
 }
 
 uint8_t dash_ui_ota_countdown_visible(void) { return dash_ota_ui_countdown(); }

@@ -96,6 +96,9 @@ static const anim_t react_anim[DASH_CAT_REACT_COUNT] = {
                                  {DASH_LOOK_PET_BELLY, 600}, {DASH_LOOK_PET_RUB, 400},
                                  {DASH_LOOK_PET_BELLY, 400}, {DASH_LOOK_PET_REST, 1200},
                                  {DASH_LOOK_PET_SIDE, 400}, {DASH_LOOK_PET_LEAN, 400}),
+    [DASH_CAT_REACT_SIT] = ANIM(false, false, {DASH_LOOK_BREAK_STRETCH_CROUCH, 350},
+                                 {DASH_LOOK_BREAK_STRETCH_REACH, 450}, {DASH_LOOK_BREAK_STRETCH_HOLD, 1000},
+                                 {DASH_LOOK_BREAK_STRETCH_RECOVER, 400}, {DASH_LOOK_BREAK_STRETCH_STAND, 400}),
 };
 
 static struct {
@@ -110,7 +113,7 @@ static struct {
     dash_cat_react_t react;
     uint32_t react_ms;
     uint32_t pet_ready_at;
-    uint32_t pet_started_at;
+    uint32_t react_started_at;
     bool pet_cooling;
     uint32_t idle_phase_tick;
     bool idle_synced;
@@ -190,15 +193,24 @@ static bool free_time(void)
     return !cat.react && cat.ctx.activity == DASH_ACT_FREE && cat.ctx.pomo == DASH_POMO_IDLE;
 }
 
-static void select_phase(uint32_t phase_ms)
+static uint32_t anim_duration(const anim_t *a)
 {
     uint32_t duration = 0;
-    for (int i = 0; i < cat.anim->n; ++i) duration += cat.anim->f[i].ms;
-    phase_ms %= duration;
-    cat.frame = 0;
-    while (phase_ms >= cat.anim->f[cat.frame].ms) {
-        phase_ms -= cat.anim->f[cat.frame++].ms;
-    }
+    for (int i = 0; i < a->n; ++i) duration += a->f[i].ms;
+    return duration;
+}
+
+static int frame_at(const anim_t *a, uint32_t *phase_ms)
+{
+    int i = 0;
+    for (; i + 1 < a->n && *phase_ms >= a->f[i].ms; ++i) *phase_ms -= a->f[i].ms;
+    return i;
+}
+
+static void select_phase(uint32_t phase_ms)
+{
+    phase_ms %= anim_duration(cat.anim);
+    cat.frame = frame_at(cat.anim, &phase_ms);
     cat.frame_ms = phase_ms;
 }
 
@@ -235,10 +247,10 @@ static void tick(lv_timer_t *t)
         start_anim(cat.react ? &react_anim[cat.react] : routine_anim());
         if (cat.react) select_phase(cat.react_ms);
     }
-    if (cat.react == DASH_CAT_REACT_PET) {
-        /* Panel refreshes may delay timer callbacks: this user gesture still lasts 4 s. */
-        cat.react_ms = lv_tick_get() - cat.pet_started_at;
-        if (cat.react_ms >= 4000) finish_reaction();
+    if (cat.react == DASH_CAT_REACT_PET || cat.react == DASH_CAT_REACT_SIT) {
+        /* Keep these reactions on wall-independent time even if the panel delays callbacks. */
+        cat.react_ms = lv_tick_get() - cat.react_started_at;
+        if (cat.react_ms >= anim_duration(cat.anim)) finish_reaction();
         else select_phase(cat.react_ms);
     } else {
         if (free_time()) select_phase(lv_tick_get()-cat.idle_phase_tick);
@@ -336,10 +348,15 @@ void dash_cat_react(dash_cat_react_t r)
         cat.pet_cooling = true;
     }
     cat.react = r;
-    if (r == DASH_CAT_REACT_PET) cat.pet_started_at = lv_tick_get();
+    cat.react_started_at = lv_tick_get();
     cat.react_ms = 0;
     cat.anim = NULL;
     start_anim(&react_anim[r]);
+}
+
+void dash_cat_stop_react(dash_cat_react_t r)
+{
+    if (r != DASH_CAT_REACT_NONE && cat.react == r) finish_reaction();
 }
 
 bool dash_cat_pet(void)
@@ -375,4 +392,10 @@ void dash_cat_draw_look_into(void *pix, int look, int x, int y, int scale)
     for (int i = 0; i < L->n; ++i) {
         dash_pix_sprite((dash_pix_t *)pix, dash_sprites[L->layer[i]], DASH_SPR_W, DASH_SPR_H, x, y, scale);
     }
+}
+
+int dash_cat_sit_look(uint32_t elapsed_ms)
+{
+    const anim_t *a = &react_anim[DASH_CAT_REACT_SIT];
+    return a->f[frame_at(a, &elapsed_ms)].look;
 }

@@ -235,7 +235,7 @@ static void floor_art(void)
 
 static void animate(lv_timer_t *timer)
 {
-    if (!season.flags || dash_ui_get_page() != 0 || dash_flight_ui_scene_active()) return;
+    if (!season.flags || dash_ui_get_page() != DASH_PAGE_ROOM || dash_flight_ui_scene_active()) return;
     season.phase = (season.phase+1)%16;
     if (season.flags & (DASH_HOL_SOLSTICE | DASH_HOL_QIXI | DASH_HOL_NATIONAL)) sky();
     if (season.flags & DASH_HOL_BIRTHDAY) floor_art();

@@ -1,6 +1,7 @@
 #include "dash_health_ui.h"
 #include "dash_i18n.h"
 #include "dash_theme.h"
+#include "dash_tools_ui.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -131,8 +132,8 @@ static void draw(lv_event_t *e)
     lv_layer_t *layer = lv_event_get_layer(e);
     const presentation_t *p = &health.view;
     const lv_font_t *title = dash_i18n_get() == DASH_LANG_ZH ? &dash_font_zh20 : &lv_font_montserrat_20;
-    label(layer, x+10, y+4, 112, 24, title, T_TEXT, dash_tr(S_HEALTH_TITLE), LV_TEXT_ALIGN_LEFT);
-    label(layer, x+120, y+10, 110, 18, small(), T_MUTED, p->status, LV_TEXT_ALIGN_RIGHT);
+    label(layer, x+DASH_TOOL_TITLE_X, y+4, 90, 24, title, T_TEXT, dash_tr(S_HEALTH_TITLE), LV_TEXT_ALIGN_LEFT);
+    label(layer, x+141, y+10, 89, 18, small(), T_MUTED, p->status, LV_TEXT_ALIGN_RIGHT);
     for (int i = 0; i < 3; ++i) {
         rect(layer, x+10+i*75, y+32, 70, 27, i == p->tab ? T_LINE : T_CARD, 5);
         label(layer, x+10+i*75, y+39, 70, 18, small(), T_TEXT,

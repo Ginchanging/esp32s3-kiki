@@ -20,6 +20,7 @@
  *                         screen status, or toggle a per-module fix / set backlight or SPI clock
  *                         (NVS dash/lcd_flags, lcd_bl, lcd_mhz; applied live by the UI task)
  *   WIFIPS on|off         Wi-Fi modem-sleep (NVS dash/wifi_ps; off = steadier 3V3 for the screen)
+ *   SIT [status|on|off|range <cm>|demo]   desk-presence radar and reminder
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,7 @@
 
 #include "app.h"
 #include "campus_net.h"
+#include "dash_sit.h"
 #include "dash_ui.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -114,6 +116,30 @@ static const char *fresh_name(dash_freshness_t f)
     }
 }
 
+static void sit_command(const char *args)
+{
+    if (!*args || !strcmp(args, "status")) {
+        app_sit_print_status(P);
+        return;
+    }
+    if (!strcmp(args, "demo")) {
+        app_sit_request_demo();
+        printf(P "sit demo=queued\n");
+        return;
+    }
+
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (!strcmp(args, "on") || !strcmp(args, "off")) {
+        err = app_sit_set_enabled(!strcmp(args, "on"));
+    } else if (!strncmp(args, "range ", 6) && args[6] >= '0' && args[6] <= '9') {
+        char *end;
+        unsigned long cm = strtoul(args + 6, &end, 10);
+        if (!*end && cm > 0 && cm <= DASH_LD2402_MAX_CM) err = app_sit_set_range((unsigned)cm);
+    }
+    if (err == ESP_OK) app_sit_print_status(P);
+    else printf(P "sit error=%s\n", esp_err_to_name(err));
+}
+
 bool app_cmd_handle(char *line)
 {
     if (!strncmp(line, "TOKEN ", 6)) {
@@ -135,7 +161,7 @@ bool app_cmd_handle(char *line)
         if (unhex(line + 5, text, sizeof(text)) <= 0) {
             printf(P "muse error=invalid_input\n");
         } else {
-            app_muse_arrived(text, time(NULL));
+            app_text_alert_arrived(DASH_SRC_MUSE, text, time(NULL));
             printf(P "muse injected=1\n");
         }
         return true;
@@ -310,6 +336,10 @@ bool app_cmd_handle(char *line)
         printf(P "mirror active=%d\n", on);
         return true;
     }
+    if (!strcmp(line, "SIT") || !strncmp(line, "SIT ", 4)) {
+        sit_command(line[3] ? line + 4 : "");
+        return true;
+    }
     if (!strcmp(line, "DASH")) {
         app_ota_print_status(P);
         char tmp[80];
@@ -348,6 +378,7 @@ bool app_cmd_handle(char *line)
                (unsigned)sizeof(st->health));
         app_unlock(false);
         app_sensor_print_status(P);
+        app_sit_print_status(P);
         app_led_print_status(P);
         return true;
     }

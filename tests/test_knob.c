@@ -14,6 +14,8 @@ static dash_state_t state;
 static const int64_t utc = 1794844800;
 static int duration_saves, saved_duration, saved_count, saved_minutes;
 static int mi_requests, mi_on, mi_bri;
+static lv_point_t touch_point;
+static bool touch_down;
 static dash_action_query_t action_query;
 static uint32_t action_seq;
 static uint32_t clock_ms(void) { return ticks; }
@@ -29,7 +31,7 @@ static void duration_saved(int m) { ++duration_saves; saved_duration = m; }
 static void totals_saved(int n, int m, int day)
 { (void)day; saved_count = n; saved_minutes = m; }
 static void mi_request(const char *dev, int on, int bri)
-{ assert(!strcmp(dev, "lamp")); ++mi_requests; mi_on = on; mi_bri = bri; }
+{ assert(!strcmp(dev, state.mi[0].id)); ++mi_requests; mi_on = on; mi_bri = bri; }
 static uint32_t action_request(const dash_action_query_t *query)
 {
     action_query = query ? *query : (dash_action_query_t){0};
@@ -45,6 +47,69 @@ static lv_obj_t *find_label(lv_obj_t *o, const char *text)
     return NULL;
 }
 static bool text(const char *s) { return find_label(lv_screen_active(), s) != NULL; }
+
+static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    data->point = touch_point;
+    data->state = touch_down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+static void tap(int x, int y)
+{
+    touch_point = (lv_point_t){x, y};
+    touch_down = true;
+    run(60);
+    touch_down = false;
+    run(60);
+}
+
+static void test_plug_lock(lv_display_t *display)
+{
+    const char status[] = "{\"mihome\":{\"ok\":true,\"devices\":[{\"id\":\"plug\",\"kind\":\"switch\","
+                          "\"online\":true,\"on\":true,\"protect_off\":true,\"power_w\":98.7,\"energy_kwh\":0.01}]}}";
+    assert(dash_model_parse_mihome(&state, status, sizeof(status) - 1));
+    dash_mi_dev_t *plug = &state.mi[0];
+    assert(plug->metered && plug->protect_off && plug->power_dw == 987 && plug->energy_wh == 10);
+    update();
+    dash_ui_set_page(DASH_PAGE_MI, false);
+    assert(text("Power 98.7 W / 0.01 kWh"));
+    lv_indev_t *finger = lv_indev_create();
+    lv_indev_set_type(finger, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_display(finger, display);
+    lv_indev_set_read_cb(finger, touch_read);
+    dash_ui_attach_indev(finger);
+    run(200);
+
+    int before = mi_requests;
+    tap(197, 75);
+    assert(find_label(lv_layer_top(), "Tap the lock first") && mi_requests == before);
+    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    assert(mi_requests == before);
+    tap(156, 75);
+    run(5100);
+    tap(197, 75);
+    assert(mi_requests == before);
+    tap(156, 75);
+    dash_ui_set_page(DASH_PAGE_FLIGHTS, false);
+    dash_ui_set_page(DASH_PAGE_MI, false);
+    tap(197, 75);
+    assert(mi_requests == before);
+
+    tap(156, 75);
+    tap(197, 75);
+    assert(mi_requests == before + 1 && mi_on == 0);
+    plug->on = false;
+    update();
+    tap(197, 75);
+    assert(mi_requests == before + 2 && mi_on == 1);
+    plug->on = true;
+    update();
+    tap(197, 75);
+    assert(mi_requests == before + 2);
+    lv_indev_delete(finger);
+}
+
 static uint8_t phase(uint8_t *percent)
 { bool night; uint8_t p; dash_ui_get_status(&night, &p, percent); return p; }
 static uint32_t health_hash(void)
@@ -90,9 +155,14 @@ int main(void)
     update();
 
     /* All pages remain reachable by holding, with wrap in either direction. */
-    dash_ui_knob(DASH_KNOB_HOLD_TURN, -1); assert(dash_ui_get_page() == 8);
-    dash_ui_knob(DASH_KNOB_HOLD_TURN, 10); assert(dash_ui_get_page() == 0);
-    dash_ui_set_page(3, false);
+    dash_ui_knob(DASH_KNOB_HOLD_TURN, -1); assert(dash_ui_get_page() == DASH_PAGE_FLIGHTS);
+    dash_ui_knob(DASH_KNOB_HOLD_TURN, 8); assert(dash_ui_get_page() == DASH_PAGE_ROOM);
+    dash_ui_set_page(DASH_PAGE_TOOLS, false);
+    dash_ui_knob(DASH_KNOB_TURN, -1);
+    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_HEALTH);
+    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_NONE);
+    dash_ui_knob(DASH_KNOB_TURN, 1);
+    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_POMODORO);
     dash_ui_pomo_duration_restore(27); update(); assert(text("Focus: 25 min"));
     dash_ui_knob(DASH_KNOB_TURN, INT_MIN); assert(text("Focus: 15 min"));
     dash_ui_knob(DASH_KNOB_TURN, INT_MAX); assert(text("Focus: 60 min"));
@@ -103,7 +173,10 @@ int main(void)
     dash_ui_pomo_duration_restore(15); update();
     dash_ui_knob(DASH_KNOB_CLICK, 0);
     uint8_t pct; assert(phase(&pct) == DASH_POMO_FOCUS && pct == 0);
+    dash_ui_knob(DASH_KNOB_HOLD_TURN, 1);
+    assert(dash_ui_get_page() == DASH_PAGE_MAIL && dash_ui_get_tool() == DASH_TOOL_NONE);
     ticks += 300000; update(); assert(phase(&pct) == DASH_POMO_FOCUS && pct == 33);
+    dash_ui_open_tool(DASH_TOOL_POMODORO);
     dash_ui_knob(DASH_KNOB_TURN, 9);
     assert(text("Next focus: 60 min") && phase(&pct) == DASH_POMO_FOCUS && pct == 33);
     dash_ui_knob(DASH_KNOB_CLICK, 0); assert(phase(&pct) == DASH_POMO_PAUSED);
@@ -111,6 +184,7 @@ int main(void)
     assert(phase(&pct) == DASH_POMO_PAUSED && pct == paused);
     dash_ui_knob(DASH_KNOB_TURN, -9);
     dash_ui_set_lang(DASH_LANG_ZH); dash_ui_set_lang(DASH_LANG_EN);
+    assert(dash_ui_get_tool() == DASH_TOOL_POMODORO);
     assert(text("Next focus: 15 min") && phase(&pct) == DASH_POMO_PAUSED && pct == paused);
     dash_ui_knob(DASH_KNOB_CLICK, 0);
     ticks += 600000; update();
@@ -143,6 +217,9 @@ int main(void)
     dash_ui_knob(DASH_KNOB_TURN, INT_MIN); run(600); assert(mi_bri == 1);
     int before = mi_requests;
     dash_ui_knob(DASH_KNOB_CLICK, 0); assert(mi_requests == before+1 && mi_on == 0);
+    state.mi[0].on = false;
+    update();
+    test_plug_lock(d);
 
     /* Long mail is read continuously; fast detents accumulate instead of being lost. */
     state.muse_count = DASH_MAX_MUSE;
@@ -180,7 +257,7 @@ int main(void)
     state.flights.count = 1; update(); dash_ui_knob(DASH_KNOB_TURN, -20); assert(text("TEST3"));
     state.flights.count = 0; update(); dash_ui_knob(DASH_KNOB_TURN, 1); assert(dash_ui_get_page() == 6);
 
-    dash_ui_set_page(8, false); run(300); uint32_t activity = health_hash();
+    dash_ui_open_tool(DASH_TOOL_HEALTH); run(300); uint32_t activity = health_hash();
     dash_ui_knob(DASH_KNOB_TURN, 1); run(300); uint32_t sleep = health_hash();
     dash_ui_knob(DASH_KNOB_TURN, 1); run(300); uint32_t body_hash = health_hash();
     assert(activity != sleep && sleep != body_hash && body_hash != activity);
@@ -188,6 +265,20 @@ int main(void)
     dash_ui_knob(DASH_KNOB_TURN, -1); run(300); assert(health_hash() == body_hash);
     dash_ui_set_lang(DASH_LANG_ZH); dash_ui_set_lang(DASH_LANG_EN); run(300);
     assert(health_hash() == body_hash);
+
+    dash_sit_status_t radar = {.link = DASH_SIT_LINK_LIVE, .phase = DASH_SIT_PRESENT,
+                              .enabled = true, .elapsed_s = 1694, .distance_cm = 86, .range_cm = 120};
+    dash_ui_set_sit_status(&radar);
+    dash_ui_open_tool(DASH_TOOL_SIT);
+    assert(text("In range") && text("Online") && text("86 cm") && text("Range 120 cm"));
+    radar.phase = DASH_SIT_AWAY;
+    radar.distance_cm = 0;
+    dash_ui_set_sit_status(&radar);
+    assert(text("Away") && text("No target"));
+    radar.link = DASH_SIT_LINK_STALE;
+    dash_ui_set_sit_status(&radar);
+    assert(text("Signal lost") && !text("No target"));
+    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_NONE);
 
     /* Four alternating runs, using capture times, not queue-drain times. */
     dash_ui_set_page(0, false); run(8000);

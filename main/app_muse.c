@@ -1,7 +1,6 @@
 /*
- * Muse alerts via Bemfa cloud MQTT over TLS (bemfa.com:9503, client id = Bemfa UID,
- * topic "musealert"). Same behaviour as Muse's esp32_bemfa_alert.ino, but on
- * the campus WPA2-Enterprise connection and with replay protection.
+ * Mailbox alerts via Bemfa cloud MQTT over TLS. Muse and iPhone send plain
+ * text, and agent-bemfa-notify sends JSON. The client ID is the Bemfa UID.
  */
 #include <stdio.h>
 #include <string.h>
@@ -15,13 +14,25 @@
 #include "freertos/task.h"
 #include "mqtt_client.h"
 
+typedef struct {
+    const char *name;
+    const char *hash_key;
+    uint32_t last_hash;
+    bool have_hash;
+    int subscription_id;
+    int64_t subscribed_at_ms;
+} bemfa_topic_t;
+
+enum { TOPIC_MUSE, TOPIC_AGENT, TOPIC_IPHONE, TOPIC_COUNT };
+static bemfa_topic_t topics[TOPIC_COUNT] = {
+    [TOPIC_MUSE] = {.name = MUSE_TOPIC, .hash_key = "last_hash"},
+    [TOPIC_AGENT] = {.name = AGENT_TOPIC, .hash_key = "agent_hash"},
+    [TOPIC_IPHONE] = {.name = IPHONE_TOPIC, .hash_key = "iphone_hash"},
+};
+
 static esp_mqtt_client_handle_t client;
-static int64_t subscribed_at_ms;
-static uint32_t last_hash;       /* musealert */
-static uint32_t last_agent_hash; /* agentalert */
-static char frag_topic[24];
+static bemfa_topic_t *frag_topic;
 static char frag[DASH_MUSE_TEXT];
-static int frag_len;
 
 static uint32_t fnv1a(const char *p, int n)
 {
@@ -41,41 +52,49 @@ static void set_mqtt_state(bool configured, bool connected)
     app_unlock(changed);
 }
 
-static void deliver_agent(const char *text, int len)
+static bemfa_topic_t *find_topic(const char *name, size_t len)
 {
-    uint32_t h = fnv1a(text, len);
-    if (h == last_agent_hash && esp_timer_get_time() / 1000 - subscribed_at_ms < 3000) {
-        printf("dash: agent replay ignored\n");
-        return;
+    for (size_t i = 0; i < TOPIC_COUNT; ++i) {
+        if (len == strlen(topics[i].name) && !memcmp(name, topics[i].name, len)) {
+            return &topics[i];
+        }
     }
-    static dash_muse_msg_t m; /* ~300 B, keep it off the MQTT task stack */
-    if (!dash_agent_parse(text, (size_t)len, &m)) {
-        printf("dash: agentalert payload is not agent-bemfa-notify JSON\n");
-        return;
-    }
-    last_agent_hash = h;
-    app_nvs_set_u32("muse", "agent_hash", h);
-    app_agent_arrived(&m, time(NULL));
-    printf(CAMPUS_USB_PREFIX "agent text=");
-    for (int i = 0; i < len; ++i) {
-        printf("%02x", (uint8_t)text[i]);
-    }
-    printf("\n");
+    return NULL;
 }
 
-static void deliver(const char *text, int len)
+static void deliver(bemfa_topic_t *topic, const char *text, int len)
 {
+    bool agent = topic == &topics[TOPIC_AGENT];
+    bool iphone = topic == &topics[TOPIC_IPHONE];
+    if (iphone && !len) {
+        return;
+    }
     uint32_t h = fnv1a(text, len);
     int64_t now_ms = esp_timer_get_time() / 1000;
     /* Bemfa re-sends the topic's last message right after (re)subscribing. */
-    if (h == last_hash && now_ms - subscribed_at_ms < 3000) {
-        printf("dash: muse replay ignored\n");
+    if (topic->have_hash && topic->last_hash == h && now_ms - topic->subscribed_at_ms < 3000) {
+        printf("dash: %s replay ignored\n", topic->name);
         return;
     }
-    last_hash = h;
-    app_nvs_set_u32("muse", "last_hash", h);
-    app_muse_arrived(text, time(NULL));
-    printf(CAMPUS_USB_PREFIX "muse text=");
+    static dash_muse_msg_t m; /* keep it off the MQTT task stack */
+    if (agent && !dash_agent_parse(text, (size_t)len, &m)) {
+        printf("dash: agentalert payload is not agent-bemfa-notify JSON\n");
+        return;
+    }
+    topic->last_hash = h;
+    topic->have_hash = true;
+    app_nvs_set_u32("muse", topic->hash_key, h);
+    if (agent) {
+        app_agent_arrived(&m, time(NULL));
+    } else {
+        app_text_alert_arrived(iphone ? DASH_SRC_IPHONE : DASH_SRC_MUSE, text, time(NULL));
+    }
+
+    if (iphone) {
+        printf(CAMPUS_USB_PREFIX "iphone received=1\n");
+        return;
+    }
+    printf(CAMPUS_USB_PREFIX "%s text=", agent ? "agent" : "muse");
     for (int i = 0; i < len; ++i) {
         printf("%02x", (uint8_t)text[i]);
     }
@@ -87,40 +106,56 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     esp_mqtt_event_handle_t ev = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
-        esp_mqtt_client_subscribe(client, MUSE_TOPIC, 0);
-        esp_mqtt_client_subscribe(client, AGENT_TOPIC, 0);
+        for (size_t i = 0; i < TOPIC_COUNT; ++i) {
+            bemfa_topic_t *topic = &topics[i];
+            topic->subscribed_at_ms = esp_timer_get_time() / 1000;
+            topic->subscription_id = esp_mqtt_client_subscribe(client, topic->name, 0);
+            if (topic->subscription_id < 0) {
+                printf("dash: could not subscribe to %s\n", topic->name);
+            }
+        }
         set_mqtt_state(true, true);
         printf("dash: muse mqtt connected\n");
         break;
     case MQTT_EVENT_SUBSCRIBED:
-        subscribed_at_ms = esp_timer_get_time() / 1000;
-        printf(CAMPUS_USB_PREFIX "muse subscribed=%s\n", MUSE_TOPIC);
+        for (size_t i = 0; i < TOPIC_COUNT; ++i) {
+            bemfa_topic_t *topic = &topics[i];
+            if (topic->subscription_id != ev->msg_id) {
+                continue;
+            }
+            topic->subscription_id = -1;
+            if (ev->error_handle && ev->error_handle->error_type == MQTT_ERROR_TYPE_SUBSCRIBE_FAILED) {
+                printf("dash: subscription rejected for %s\n", topic->name);
+            } else {
+                topic->subscribed_at_ms = esp_timer_get_time() / 1000;
+                printf(CAMPUS_USB_PREFIX "muse subscribed=%s\n", topic->name);
+            }
+            break;
+        }
         break;
     case MQTT_EVENT_DISCONNECTED:
+        frag_topic = NULL;
         set_mqtt_state(true, false);
         printf("dash: muse mqtt disconnected\n");
         break;
-    case MQTT_EVENT_DATA:
+    case MQTT_EVENT_DATA: {
         if (ev->current_data_offset == 0) {
-            frag_len = 0;
-            int tl = ev->topic_len < (int)sizeof(frag_topic) - 1 ? ev->topic_len : (int)sizeof(frag_topic) - 1;
-            memcpy(frag_topic, ev->topic, (size_t)(tl > 0 ? tl : 0));
-            frag_topic[tl > 0 ? tl : 0] = '\0';
+            frag_topic = find_topic(ev->topic, (size_t)ev->topic_len);
         }
-        if (ev->total_data_len >= (int)sizeof(frag)) {
-            break; /* longer than Bemfa's 256-byte limit: ignore */
+        if (!frag_topic || ev->total_data_len >= (int)sizeof(frag)) {
+            break;
         }
-        memcpy(frag + ev->current_data_offset, ev->data, (size_t)ev->data_len);
-        frag_len = ev->current_data_offset + ev->data_len;
+        if (ev->data_len) {
+            memcpy(frag + ev->current_data_offset, ev->data, (size_t)ev->data_len);
+        }
+        int frag_len = ev->current_data_offset + ev->data_len;
         if (frag_len == ev->total_data_len) {
             frag[frag_len] = '\0';
-            if (!strcmp(frag_topic, AGENT_TOPIC)) {
-                deliver_agent(frag, frag_len);
-            } else {
-                deliver(frag, frag_len);
-            }
+            deliver(frag_topic, frag, frag_len);
+            frag_topic = NULL;
         }
         break;
+    }
     case MQTT_EVENT_ERROR:
         printf("dash: muse mqtt error type=%d\n", ev->error_handle ? ev->error_handle->error_type : -1);
         break;
@@ -147,8 +182,10 @@ void muse_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        app_nvs_get_u32("muse", "last_hash", &last_hash);
-        app_nvs_get_u32("muse", "agent_hash", &last_agent_hash);
+        for (size_t i = 0; i < TOPIC_COUNT; ++i) {
+            bemfa_topic_t *topic = &topics[i];
+            topic->have_hash = app_nvs_get_u32("muse", topic->hash_key, &topic->last_hash) == ESP_OK;
+        }
         app_nvs_get_str("muse", "uid", uid, sizeof(uid));
         if (!uid[0]) {
             set_mqtt_state(false, false);

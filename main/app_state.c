@@ -169,10 +169,10 @@ dash_led_timers_t *app_led_timers_locked(void)
     return &led_timers;
 }
 
-void app_muse_arrived(const char *utf8, int64_t ts)
+void app_text_alert_arrived(dash_msg_src_t src, const char *utf8, int64_t ts)
 {
     dash_state_t *st = app_lock();
-    dash_muse_push(st, utf8, ts);
+    dash_msg_push(st, src, DASH_MSG_INFO, "", utf8, ts);
     led_timers.muse_until_ms = esp_timer_get_time() / 1000 + 4800;
     app_unlock(true);
 }

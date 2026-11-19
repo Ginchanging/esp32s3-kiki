@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Firmware for an ESP32-S3 N16R8 desk dashboard on the SYSU campus Wi-Fi (WPA2-Enterprise PEAP), starring **Kiki**, an original pixel cat. It has nine LVGL pages: Kiki's room, GitHub Actions, servers, pomodoro, mailbox, Mi Home (米家), overhead flights, iCloud agenda, and Apple Health. The UI is bilingual (zh/en).
+Firmware for an ESP32-S3 N16R8 desk dashboard on the SYSU campus Wi-Fi (WPA2-Enterprise PEAP), starring **Kiki**, an original pixel cat. The seven outer LVGL pages are Kiki's room, GitHub Actions, servers, Tools, mailbox, Mi Home (米家), and overhead flights. Tools opens pomodoro, iCloud agenda, LD2402 desk time, and Apple Health. The UI is bilingual (zh/en).
 
 The 2.8" ILI9341V + FT6336G screen is wired and driven by `main/app_lcd.c`:
 - `./esp.sh mirror` still streams the same frames to a Mac window; clicks there become touches alongside the real touch panel.
@@ -31,9 +31,11 @@ Everything goes through `./esp.sh`. ESP-IDF v6.1 must be at `~/esp/esp-idf-v6.1`
 ./esp.sh knob cw|ccw [n]|hold cw [n]|press|long|rev   # EC11 knob stand-in (same queue as the real knob)
 ./esp.sh lcd [inv|rgb|mx|my|tmx|tmy|txy|bl N|mhz N|reset]   # screen status / per-module fixes (NVS dash/lcd_*)
 ./esp.sh wifips on|off          # Wi-Fi modem-sleep; default off because its current pulses flicker the 3V3 backlight
+./esp.sh sit [status|on|off|range 120|demo]   # LD2402 desk presence and Kiki's stretch reminder
 ./esp.sh cat diary [week]       # write Kiki's diary / weekly report now
 
 ./esp.sh sim [fixtures/x.json]  # simulator window (keys listed at top of sim/main.c)
+./esp.sh sim fixtures/23_sit.json --tool sit   # radar view with synthetic readings
 ./esp.sh shots                  # all simulator screenshots + shots/sheet_*.png contact sheets
 ./build-sim/dash_sim --shot out.bmp --fixture fixtures/1_ok.json --page 2 --lang en \
     [--act N] [--react N] [--agent done] [--night] [--muse "…"] [--ms 300] \
@@ -67,14 +69,16 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
 | campus | `components/campus_net` (derived from the original `campus.c`) | PEAP connect, backoff retry, SNTP, the `@sysu` USB-serial command protocol. Extra commands go through the `on_command` hook into `main/app_cmd.c` |
 | ui | `app_ui.c` + `app_lcd.c` | The **only** task that touches LVGL and the panel. ILI9341 over SPI2 (40 MHz DMA, byte-swapped in place; the DMA-done ISR only gives a semaphore that `flush_wait_cb` takes), FT6336 polled over I2C, LEDC backlight on GPIO7. Also mirror streaming (`@F` RLE+base64 lines over USB) and a touch queue fed by `TOUCH`. Falls back to headless if SPI init fails |
 | fetch | `app_fetch.c` | Every 30 s, HTTPS GET of the hub's `/api/device/status`, with the hub cert pinned (`main/certs/hub.pem`). Also sends Mi Home taps (`app_request_mi`) as `POST /api/device/mi` |
-| muse | `app_muse.c` | Bemfa MQTT over TLS 9503. Topics `musealert` (Muse) and `agentalert` (AI-agent pushes from github.com/Ginchanging/agent-bemfa-notify). Per-topic replay dedupe, because Bemfa resends the last message on subscribe |
+| muse | `app_muse.c` | Bemfa MQTT over TLS 9503. Topics `musealert` (Muse), `iPhone` (plain-text phone notifications), and `agentalert` (AI-agent pushes from github.com/Ginchanging/agent-bemfa-notify). Per-topic replay dedupe, because Bemfa resends the last message on subscribe |
 | led | `app_led.c` | Onboard WS2812 via RMT + common-cathode KY-016 (R/G/B = GPIO4/5/6) via LEDC timer 1, channels 1/2/3; backlight keeps timer/channel 0. Rules are shared: `dash_led_pattern()` / `dash_led_color_ex()` in dash_model |
 | knob | `app_knob.c` | EC11 on GPIO 1/2/42: PCNT quadrature + polled button → `app_knob_push()` queue (the `KNOB` command feeds the same queue) → UI task → `dash_ui_knob()` |
 | sensor | `app_sensor.c` + `sht3x.c` | SHT3x single-shot read every 5 s on its own I2C controller, SDA GPIO13 / SCL GPIO14 (user-confirmed 2026-11-16), VCC 3V3. Touch stays on GPIO15/16. Probe 0x44/0x45; validate both CRCs; invalidate after 3 failed samples and retry. Updates existing `sensor_valid` / `temp_c` / `humidity` under the state mutex, never LVGL |
+| sit | `app_sit.c` + `dash_sit.c` | HLK-LD2402 J2 `T` to GPIO21 (UART1 RX only). Auto-probes 115200/921600 text reports. The local monotonic desk timer pauses after 10 s of uninterrupted out-of-range or OFF reports and resets after 30 s of absence or 3 s without reports. Only `dash/sit_en` and `dash/sit_range` live in NVS. After one hour, the UI consumes the once-per-stay reminder on an in-range report when higher-priority notices are clear. `SIT demo` / `--sit-demo` play the labelled A stretch without changing the session |
 
 - State lives in `app_state.c`: one `dash_state_t` behind a mutex (`app_lock`/`app_unlock`).
 - Other tasks request UI work through flags the UI task polls (lang, `CAT`, mirror, dirty). They never call LVGL.
 - The UI writes night/pomodoro status back into the state so the LED task can follow it.
+- The Tools tile has four child views and one shared back button. The desk-time view allocates its readout while open. The UI task reads its radar snapshot under the same mutex as the serial diagnostics. Simulator desk-time snapshots live in fixture _sim.sit.
 - SHT3x temperature/humidity appears in the existing home-page environment label. `./esp.sh dash` includes sensor freshness/errors and KY-016 PWM diagnostics. `LED 48|38|off` still configures only the onboard WS2812; the external KY-016 follows the same shared light rules independently.
 - Hardware validation 2026-11-16: OTA completed with boot verification; the user confirmed live temperature/humidity numbers on the home page and normal touch. KY-016 physical colours have not yet been visually verified.
 
@@ -86,7 +90,7 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
   - simulator input, plus an optional `_sim` section for device-side state;
   - firmware demo data, embedded via `EMBED_TXTFILES` and used by the `DEMO` command;
   - test cases for `shots.sh`.
-- Mailbox messages (`dash_muse_msg_t`) carry a source (Muse / Claude / Codex / Mi Home / Kiki) and a kind (done / attention / error).
+- Mailbox messages (`dash_muse_msg_t`) carry a source (iPhone / Muse / Claude / Codex / Mi Home / Kiki) and a kind (info / done / attention / error).
 - **Kiki's diary.** At 23:00 (`dash_diary_due()`, weekly on Sundays) the UI task composes `dash_ui_diary_msg()` and pushes it to the mailbox.
   - Inputs: the hub's `days` (7 days of ci_ok/ci_fail/wash/down/commits) and the device's pomodoro ring.
   - The hub keeps `days` in `Ledger` (`/var/lib/esp-dash/ledger.json`, systemd `StateDirectory`), counting from `add_event()`.
@@ -129,9 +133,9 @@ front-facing idle pose inside the outdoor scene, including its opening and closi
 the clouds, distant roofs and parapet; night dimming still follows the existing global rule.
 
 **Calendar and holidays.**
-Calendar is independent: `CalendarHub` in `server/dashd.py` reads the HA CalDAV entry named by `server/calendar.json` (default `Kiki iCloud`), all its calendar entities, every 15 minutes. `/api/device/calendar` is token-protected and paginated at 8 events/8 KiB; `dash_calendar_t` and its failures never alter dashboard freshness. UI requests go through a latest-query sequence in `app_state.c`, consumed by fetch (never LVGL on fetch). Titles are not logged. HA UI setup includes all-day events; credentials stay in HA. `dash_calendar_ui.c` owns page 7 and the wall-calendar entry. `dash_season.c` draws code-native decorations and pauses animation behind the flyover scene. Holidays use offline HKO dates for 2026–2099 (`scripts/gen_holidays.py`), not LVGL's inaccurate solar-term table. Birthday is Gregorian August 7. Never edit the generated date include manually.
+Calendar is independent: `CalendarHub` in `server/dashd.py` reads the HA CalDAV entry named by `server/calendar.json` (default `Kiki iCloud`), all its calendar entities, every 15 minutes. `/api/device/calendar` is token-protected and paginated at 8 events/8 KiB; `dash_calendar_t` and its failures never alter dashboard freshness. UI requests go through a latest-query sequence in `app_state.c`, consumed by fetch (never LVGL on fetch). Titles are not logged. HA UI setup includes all-day events; credentials stay in HA. `dash_calendar_ui.c` owns the calendar tool and its wall-calendar shortcut. `dash_season.c` draws code-native decorations and pauses animation behind the flyover scene. Holidays use offline HKO dates for 2026–2099 (`scripts/gen_holidays.py`), not LVGL's inaccurate solar-term table. Birthday is Gregorian August 7. Never edit the generated date include manually.
 
-**Apple Health.** `server/health.py` reads only the iPhone entities explicitly mapped in `/etc/esp-dash/health.json`, in one local HA template call per minute. The small `kiki_health_reports` HA component tracks only actual `mobile_app` update timestamps for those entities, never values; its markers are not restored after HA restarts. Accept a state only when its timestamp matches that report evidence. `ha_setup.py bind` discovers official health unique IDs within one device, excludes their HA Recorder history, and never prints values. HA HTTP settings are managed through the versioned admin API (2026.8+), not the old YAML `http:` block; `ha.kiki-home.top` uses Caddy and HA's native login. `health` is an optional, at-most-2-KiB part of the existing 8-KiB status reply. Its parsing/failures are independent of dashboard freshness and OTA verification. Absolute weights stay in mode-0600 hub state; only relative 0.1-kg values reach the board. Records are observations from onboarding, not HealthKit measurement dates; never invent dates or carry yesterday's totals into today. Private cache v2 discards unverified v1 observations; the wire schema remains 1. `dash_health_ui.c` owns page 8 (activity/sleep/body) with four objects and code-native drawing to spare internal heap. `main/app_ui.c` keeps its non-DMA state snapshot in PSRAM. `DEMO health` is synthetic and never updates server history. `health_watch.py` records resource counters only; device heap/uptime piggyback on existing status requests and the diagnostics endpoint requires the device token.
+**Apple Health.** `server/health.py` reads only the iPhone entities explicitly mapped in `/etc/esp-dash/health.json`, in one local HA template call per minute. The small `kiki_health_reports` HA component tracks only actual `mobile_app` update timestamps for those entities, never values; its markers are not restored after HA restarts. Accept a state only when its timestamp matches that report evidence. `ha_setup.py bind` discovers official health unique IDs within one device, excludes their HA Recorder history, and never prints values. HA HTTP settings are managed through the versioned admin API (2026.8+), not the old YAML `http:` block; `ha.kiki-home.top` uses Caddy and HA's native login. `health` is an optional, at-most-2-KiB part of the existing 8-KiB status reply. Its parsing/failures are independent of dashboard freshness and OTA verification. Absolute weights stay in mode-0600 hub state; only relative 0.1-kg values reach the board. Records are observations from onboarding, not HealthKit measurement dates; never invent dates or carry yesterday's totals into today. Private cache v2 discards unverified v1 observations; the wire schema remains 1. `dash_health_ui.c` owns the health tool (activity/sleep/body) with four objects and code-native drawing to spare internal heap. `main/app_ui.c` keeps its non-DMA state snapshot in PSRAM. `DEMO health` is synthetic and never updates server history. `health_watch.py` records resource counters only; device heap/uptime piggyback on existing status requests and the diagnostics endpoint requires the device token.
 
 **Fonts.**
 

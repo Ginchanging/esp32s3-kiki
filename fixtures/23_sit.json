@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "generated_at": 1794544200,
+  "_sim": {
+    "now": 1794544200,
+    "sit": {
+      "link": "live",
+      "phase": "present",
+      "distance_cm": 86,
+      "range_cm": 120,
+      "elapsed_s": 1694
+    }
+  }
+}

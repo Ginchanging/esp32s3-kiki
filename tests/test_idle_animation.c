@@ -150,7 +150,27 @@ int main(void)
     run(50);
     assert(shows(DASH_LOOK_WASH));
     assert(dash_cat_force_look("auto"));
+
+    dash_cat_react(DASH_CAT_REACT_SIT);
+    run(50);
+    assert(shows(DASH_LOOK_BREAK_STRETCH_CROUCH));
+    run(350);
+    assert(shows(DASH_LOOK_BREAK_STRETCH_REACH));
+    run(400);
+    assert(shows(DASH_LOOK_BREAK_STRETCH_HOLD));
+    run(1000);
+    assert(shows(DASH_LOOK_BREAK_STRETCH_RECOVER));
+    run(400);
+    assert(shows(DASH_LOOK_BREAK_STRETCH_STAND));
+    run(400);
+    assert(dash_cat_reacting() == DASH_CAT_REACT_NONE);
+    assert(dash_cat_sit_look(8000) == DASH_LOOK_BREAK_STRETCH_STAND);
+    dash_cat_react(DASH_CAT_REACT_SIT);
+    dash_cat_react(DASH_CAT_REACT_CI_FAIL);
+    dash_cat_stop_react(DASH_CAT_REACT_SIT);
+    assert(dash_cat_reacting() == DASH_CAT_REACT_CI_FAIL);
+
     dash_cat_destroy();
-    puts("clock phase, recreation, reaction return, pomodoro/sleep priority, no-clock fallback and legacy looks passed");
+    puts("clock phase, recreation, reaction return, desk stretch, pomodoro/sleep priority and legacy looks passed");
     return 0;
 }

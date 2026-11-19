@@ -19,8 +19,9 @@
 #   ./esp.sh knob cw|ccw [n]|hold cw [n]|press|long|rev   act like the EC11 knob (rev = flip direction)
 #   ./esp.sh lcd [inv|rgb|mx|my|tmx|tmy|txy|bl 60|mhz 20|reset]   screen status / per-module fixes
 #   ./esp.sh wifips on|off         Wi-Fi power save (default off: steadier 3V3, no backlight flicker)
+#   ./esp.sh sit [status|on|off|range 120|demo]  LD2402 seat detection and Kiki's stretch reminder
 #   ./esp.sh mirror                live window of the REAL board (frames over USB, click = touch)
-#   ./esp.sh sim [fixture]         open the simulator window (fake data)
+#   ./esp.sh sim [fixture] [--tool pomodoro|calendar|sit|health]   simulator window (fake data)
 #   ./esp.sh shots                 render all simulator screenshots into shots/
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -48,9 +49,10 @@ case "$action" in
   mi) campus mi "$*" ;;
   knob) campus knob "$*" ;;
   lcd) campus lcd "$*" ;;
+  sit) campus sit "$*" ;;
   muse-send) python3 scripts/muse_send.py "$@" ;;
   mirror) idf_env; python -B scripts/mirror.py "$@" ;;
-  sim) sim_build >/dev/null; ./build-sim/dash_sim "${1:-fixtures/1_ok.json}" ;;
+  sim) sim_build >/dev/null; ./build-sim/dash_sim fixtures/1_ok.json "$@" ;;
   shots) sim_build >/dev/null; ./scripts/shots.sh ;;
-  *) sed -n '2,22p' "$0"; exit 2 ;;
+  *) sed -n '2,23p' "$0"; exit 2 ;;
 esac

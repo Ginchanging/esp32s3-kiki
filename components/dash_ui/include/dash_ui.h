@@ -10,6 +10,7 @@
 
 #include "dash_model.h"
 #include "dash_actions.h"
+#include "dash_sit.h"
 #include "lvgl.h"
 
 #ifdef __cplusplus
@@ -18,7 +19,14 @@ extern "C" {
 
 #define DASH_UI_W 240
 #define DASH_UI_H 320
-#define DASH_UI_PAGES 9 /* 0 room, 1 GitHub, 2 servers, 3 pomodoro, 4 mailbox, 5 Mi Home, 6 flights, 7 calendar, 8 health */
+typedef enum {
+    DASH_PAGE_ROOM, DASH_PAGE_GITHUB, DASH_PAGE_SERVERS, DASH_PAGE_TOOLS,
+    DASH_PAGE_MAIL, DASH_PAGE_MI, DASH_PAGE_FLIGHTS, DASH_UI_PAGES,
+} dash_page_t;
+
+typedef enum {
+    DASH_TOOL_NONE, DASH_TOOL_POMODORO, DASH_TOOL_CALENDAR, DASH_TOOL_SIT, DASH_TOOL_HEALTH, DASH_TOOL_COUNT,
+} dash_tool_t;
 
 typedef void (*dash_ui_lang_cb_t)(dash_lang_t lang);
 typedef void (*dash_ui_pomo_cb_t)(int count, int minutes, int yday);
@@ -44,7 +52,7 @@ void dash_ui_on_event(const dash_event_t *e);
 void dash_ui_show_event(const dash_event_t *e, uint32_t ms); /* = dash_ui_on_event */
 /* A Muse alert: Kiki holds up a sign and the message pops up. */
 void dash_ui_show_muse(const char *utf8, int64_t ts, uint32_t ms);
-/* An AI agent push (Claude Code / Codex via agent-bemfa-notify): Kiki reacts by kind. */
+/* A labelled mailbox notice. Kiki reacts to the source and message kind. */
 void dash_ui_show_agent(const dash_muse_msg_t *m, uint32_t ms);
 
 void dash_ui_set_lang(dash_lang_t lang); /* rebuilds the screen */
@@ -55,6 +63,9 @@ void dash_ui_set_page(int page, bool anim);
 /* Next/previous page(s); wraps around (the first page's "previous" is the last page). */
 void dash_ui_step_page(int delta);
 int dash_ui_get_page(void);
+/* Open a child of Tools directly, for the wall calendar and simulator. */
+void dash_ui_open_tool(dash_tool_t tool);
+dash_tool_t dash_ui_get_tool(void);
 
 /* Pomodoro: configurable 15..60 min focus (default 25), fixed 5 min break. */
 void dash_ui_set_pomo_cb(dash_ui_pomo_cb_t cb);
@@ -97,6 +108,11 @@ void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms);
 
 /* What the status LED should know about. */
 void dash_ui_get_status(bool *night, uint8_t *pomo_phase, uint8_t *pomo_percent);
+
+/* Local desk break. Wait for ready before consuming the firmware's pending reminder. */
+bool dash_ui_sit_ready(void);
+void dash_ui_show_sit(bool demo);
+void dash_ui_set_sit_status(const dash_sit_status_t *status);
 
 /* Testing hooks (CAT serial command, simulator keys). -1 = automatic. */
 void dash_ui_debug_activity(int activity);

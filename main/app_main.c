@@ -7,6 +7,7 @@
  *   led task    : status LED
  *   knob task   : EC11 rotary knob (pages, lamp, pomodoro)
  *   sensor task : SHT3x temperature/humidity on a separate I2C bus (GPIO13/14)
+ *   sit task    : LD2402 desk-presence radar on UART1 RX (GPIO21)
  */
 #include <stdio.h>
 #include <string.h>
@@ -94,4 +95,5 @@ void app_main(void)
     xTaskCreatePinnedToCore(led_task, "led", 3072, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(knob_task, "knob", 3072, NULL, 3, NULL, 1);
     xTaskCreatePinnedToCore(sensor_task, "sensor", 3072, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(sit_task, "sit", 3072, NULL, 2, NULL, 1);
 }

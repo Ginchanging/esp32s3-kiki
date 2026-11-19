@@ -100,7 +100,7 @@ typedef struct {
     char subject[80];
 } dash_event_t;
 
-/* Messages in Kiki's mailbox: Muse alerts and AI agent pushes (agentalert topic) */
+/* Messages in Kiki's mailbox. */
 typedef enum {
     DASH_SRC_MUSE = 0,
     DASH_SRC_CLAUDE,
@@ -108,6 +108,7 @@ typedef enum {
     DASH_SRC_OTHER,
     DASH_SRC_MIHOME,
     DASH_SRC_KIKI, /* Kiki's own diary / weekly report */
+    DASH_SRC_IPHONE,
 } dash_msg_src_t;
 typedef enum { DASH_MSG_INFO = 0, DASH_MSG_DONE, DASH_MSG_ATTENTION, DASH_MSG_ERROR } dash_msg_kind_t;
 
@@ -145,8 +146,12 @@ typedef struct {
     uint8_t state; /* dash_mi_state_t (washer, dispenser) */
     bool online;
     bool on;          /* lamp / switch */
+    bool protect_off; /* require unlocking before turning this switch off in the UI */
+    bool metered;
     int8_t bri;       /* lamp brightness 1..100, -1 unknown */
     int8_t pct;       /* washer progress 0..100, -1 unknown */
+    int32_t power_dw; /* switch power in tenths of a watt, -1 unknown */
+    int32_t energy_wh; /* switch energy in Wh, -1 unknown */
     int64_t eta;      /* washer: expected finish (UTC epoch s), 0 unknown */
     /* water dispenser (DASH_NONE16 / -1 = unknown) */
     int16_t temp_c, tds;

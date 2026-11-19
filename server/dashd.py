@@ -541,7 +541,9 @@ MI_DISPENSER_WORDS = (
 # kind -> the entity key it cannot work without
 MI_REQUIRED = {"lamp": "entity", "switch": "entity", "washer": "status", "dispenser": "status",
                "scale": "weight_event"}
-MI_ENTITY_KEYS = ("entity", "status", "stage", "left", "end_event", "temp", "tds", "weight_event", "offline_event")
+MI_METER_UNITS = {"power_w": "W", "energy_kwh": "kWh"}
+MI_ENTITY_KEYS = ("entity", "status", "stage", "left", "end_event", "temp", "tds", "weight_event", "offline_event",
+                  *MI_METER_UNITS)
 # Event attributes that may carry a weighing (Xiaomi Home names arguments after the MIoT spec, zh-Hans)
 MI_WEIGHT_ATTRS = ("称重过程数据", "离线数据上报")
 SCALE_KEEP_DAYS = 60
@@ -814,8 +816,24 @@ class MiHome:
 
     @staticmethod
     def base(d):
-        return {"id": d["id"], "kind": d["kind"], "name_zh": wire_text(d.get("name_zh", d["id"]), 23),
-                "name_en": wire_text(d.get("name_en", d["id"]), 23), "online": False}
+        v = {"id": d["id"], "kind": d["kind"], "name_zh": wire_text(d.get("name_zh", d["id"]), 23),
+             "name_en": wire_text(d.get("name_en", d["id"]), 23), "online": False}
+        if d["kind"] == "switch":
+            if d.get("protect_off") is True:
+                v["protect_off"] = True
+            v.update({key: None for key in MI_METER_UNITS if d.get(key)})
+        return v
+
+    def read_meter(self, entity, unit):
+        try:
+            st = self.ha.state(entity)
+            attrs = st["attributes"]
+            if not isinstance(attrs, dict) or attrs.get("unit_of_measurement") != unit:
+                return None
+            value = float(st["state"])
+        except (HAError, OSError, ValueError, TypeError, KeyError, OverflowError, http.client.HTTPException):
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
 
     def read(self, d):
         v = self.base(d)
@@ -947,6 +965,10 @@ class MiHome:
                 v = self.read(d)
                 if d["kind"] == "washer":
                     self.track_washer(d, v)
+                if v["online"]:
+                    for key, unit in MI_METER_UNITS.items():
+                        if key in v:
+                            v[key] = self.read_meter(d[key], unit)
             except (HAError, OSError, ValueError, KeyError, http.client.HTTPException) as e:
                 ok = False
                 v = self.base(d)
@@ -989,6 +1011,11 @@ class MiHome:
         log("mihome: control", dev, "on" if want else "off", bri if bri is not None else "",
             "->", "on" if v.get("on") else "off")
         with self.lock:
+            previous = self.view[dev]
+            if v["online"]:
+                for key in MI_METER_UNITS:
+                    if key in v and (key != "power_w" or previous.get("on") == v["on"]):
+                        v[key] = previous.get(key)
             self.view[dev] = v
         return self.snapshot()
 

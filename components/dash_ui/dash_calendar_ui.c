@@ -1,6 +1,7 @@
 #include "dash_calendar_ui.h"
 #include "dash_i18n.h"
 #include "dash_theme.h"
+#include "dash_tools_ui.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -79,8 +80,7 @@ static void request(void)
     render();
 }
 
-/* This shortcut spans seven tiles: jump directly instead of sliding through them. */
-static void open_page(lv_event_t *e) { dash_ui_set_page(7, false); }
+static void open_page(lv_event_t *e) { dash_ui_open_tool(DASH_TOOL_CALENDAR); }
 
 static void select_day(lv_event_t *e)
 {
@@ -160,8 +160,8 @@ void dash_calendar_ui_home(lv_obj_t *home)
 void dash_calendar_ui_create(lv_obj_t *tile)
 {
     const lv_font_t *title = dash_i18n_get() == DASH_LANG_ZH ? &dash_font_zh20 : &lv_font_montserrat_20;
-    text(label(tile, 10, 2, 112, title, T_TEXT), dash_tr(S_CAL_TITLE));
-    cal.status = label(tile, 124, 9, 106, small(), T_MUTED);
+    text(label(tile, DASH_TOOL_TITLE_X, 2, 92, title, T_TEXT), dash_tr(S_CAL_TITLE));
+    cal.status = label(tile, 143, 9, 87, small(), T_MUTED);
     lv_obj_set_style_text_align(cal.status, LV_TEXT_ALIGN_RIGHT, 0);
     for (int i = 0; i < 7; ++i) {
         cal.days[i] = box(tile, 10+i*32, 31, 28, 42, T_CARD);
@@ -291,7 +291,7 @@ void dash_calendar_ui_update(const dash_calendar_t *st, int64_t now, bool clock_
 
 void dash_calendar_ui_page_changed(void)
 {
-    bool active = dash_ui_get_page() == 7;
+    bool active = dash_ui_get_tool() == DASH_TOOL_CALENDAR;
     if (active && !cal.active && cal.clock_valid) {
         cal.day = cal.today;
         cal.offset = 0;
