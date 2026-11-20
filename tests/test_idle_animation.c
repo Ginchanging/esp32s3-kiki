@@ -93,14 +93,14 @@ int main(void)
 
     assert(dash_cat_pet());
     run(50);
-    assert(shows(DASH_LOOK_PET_LEAN));
+    assert(shows(DASH_LOOK_PET_TILT));
     assert(!dash_cat_pet()); /* a repeated pet cannot restart its first frame */
     run(650);
-    assert(shows(DASH_LOOK_PET_BELLY));
+    assert(shows(DASH_LOOK_PET_NUZZLE));
     dash_cat_react(DASH_CAT_REACT_CI_FAIL);
     assert(!dash_cat_pet());
     run(50);
-    assert(shows(DASH_LOOK_PUFFED)); /* real notifications preempt the belly rub */
+    assert(shows(DASH_LOOK_PUFFED)); /* real notifications preempt the pet reaction */
     run(2700);
     assert(dash_cat_pet());
     run(4000);
@@ -115,7 +115,7 @@ int main(void)
     image = dash_cat_create(root, 0, 0);
     dash_cat_set_ctx(&ctx);
     run(50);
-    assert(shows(DASH_LOOK_PET_BELLY)); /* rebuilding retains the reaction phase */
+    assert(shows(DASH_LOOK_PET_NUZZLE)); /* rebuilding retains the reaction phase */
     run(3400);
 
     ctx.pomo = DASH_POMO_FOCUS;

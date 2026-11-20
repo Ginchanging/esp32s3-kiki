@@ -14,7 +14,7 @@ root = pathlib.Path(__file__).resolve().parents[1]
 sim, out = pathlib.Path(sys.argv[1]).resolve(), pathlib.Path(sys.argv[2]).resolve()
 out.mkdir(parents=True, exist_ok=True)
 base = json.loads((root/"fixtures/1_ok.json").read_text())
-names = ["sit", "window", "lie", "stretch", "groom", "yawn", "yarn"]
+names = ["sit", "window", "lie", "groom", "yawn", "yarn"]
 samples = subprocess.check_output([str(sim.parent/"test_idle"), "--samples"], text=True)
 timeline = subprocess.check_output([str(sim.parent/"test_idle"), "--timeline"], text=True)
 (out/"idle_timeline.csv").write_text("time,kind,duration_s,base\n"+"\n".join(
@@ -64,7 +64,7 @@ def pixels(label, scale=4):
 
 
 labels = ["wash 2", "wash", "window", "window blink", "rest", "rest 2",
-          "rest blink", "stretch", "stretch 2", "drowsy", "yarn", "yarn 2"]
+          "rest blink", "drowsy", "yarn", "yarn 2"]
 sheet = Image.new("RGB", (6*156, 2*196), (23, 21, 31))
 draw = ImageDraw.Draw(sheet)
 for i, label in enumerate(labels):
@@ -77,7 +77,6 @@ sheet.save(out/"kiki_idle_pixels.png")
 # Short cycles at the board's actual 4x scale, without interpolated pixels.
 for name, poses, durations in [
     ("groom", ["wash 2", "wash", "wash 2", "wash", "wash 2"], [650, 250, 650, 250, 900]),
-    ("stretch", ["stretch", "stretch 2", "stretch"], [1200, 1000, 800]),
     ("yarn", ["yarn", "yarn 2", "yarn"], [550, 650, 900]),
     ("window", ["window", "window tail", "window"], [16000, 850, 8000]),
     ("quiet", ["idle", "blink", "idle", "tail", "idle", "window", "window blink", "window", "rest", "rest 2", "rest blink"],

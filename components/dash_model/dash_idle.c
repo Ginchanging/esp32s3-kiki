@@ -55,7 +55,7 @@ dash_idle_state_t dash_idle_at(int64_t utc)
         if (ball >= 0 && ball < start+duration && ball+ball_duration > start) return out;
     }
     if ((choice >> 8) % 4 == 0) {
-        int gesture = DASH_IDLE_STRETCH+(int)((choice >> 12) % 3);
+        int gesture = DASH_IDLE_GROOM+(int)((choice >> 12) % 2);
         int length = gesture == DASH_IDLE_GROOM ? 6+(int)((choice >> 16) % 5)
                                                : 2+(int)((choice >> 16) % 3);
         int offset = 20+(int)((choice >> 20) % 20);

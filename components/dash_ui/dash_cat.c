@@ -59,7 +59,6 @@ static const anim_t idle_anim[DASH_IDLE_COUNT] = {
                            {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
                            {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_2, 1100},
                            {DASH_LOOK_REST, 2100}, {DASH_LOOK_REST_BLINK, 150}),
-    [DASH_IDLE_STRETCH] = ANIM(true, true, {DASH_LOOK_STRETCH, 1200}, {DASH_LOOK_STRETCH_2, 1000}),
     [DASH_IDLE_GROOM] = ANIM(true, true, {DASH_LOOK_WASH_2, 650}, {DASH_LOOK_WASH, 250},
                              {DASH_LOOK_WASH_2, 650}, {DASH_LOOK_WASH, 250}, {DASH_LOOK_WASH_2, 900}),
     [DASH_IDLE_YAWN] = ANIM(true, true, {DASH_LOOK_YAWN, 1400}, {DASH_LOOK_DROWSY, 1200}),
@@ -92,10 +91,11 @@ static const anim_t react_anim[DASH_CAT_REACT_COUNT] = {
     [DASH_CAT_REACT_POMO_DONE] = ANIM(false, false, {DASH_LOOK_CI_PASS, 160}, {DASH_LOOK_CI_PASS_2, 160},
                                       {DASH_LOOK_CI_PASS, 160}, {DASH_LOOK_CI_PASS_2, 160},
                                       {DASH_LOOK_HAPPY, 1500}),
-    [DASH_CAT_REACT_PET] = ANIM(false, false, {DASH_LOOK_PET_LEAN, 300}, {DASH_LOOK_PET_SIDE, 300},
-                                 {DASH_LOOK_PET_BELLY, 600}, {DASH_LOOK_PET_RUB, 400},
-                                 {DASH_LOOK_PET_BELLY, 400}, {DASH_LOOK_PET_REST, 1200},
-                                 {DASH_LOOK_PET_SIDE, 400}, {DASH_LOOK_PET_LEAN, 400}),
+    /* Seated head-tilt smile; the heart floats between two heights. */
+    [DASH_CAT_REACT_PET] = ANIM(false, false, {DASH_LOOK_PET_TILT, 300}, {DASH_LOOK_PET_NUZZLE, 500},
+                                 {DASH_LOOK_PET_TILT_2, 300}, {DASH_LOOK_PET_NUZZLE, 500},
+                                 {DASH_LOOK_PET_PURR, 850}, {DASH_LOOK_PET_PURR_2, 850},
+                                 {DASH_LOOK_PET_TILT_2, 700}),
     [DASH_CAT_REACT_SIT] = ANIM(false, false, {DASH_LOOK_BREAK_STRETCH_CROUCH, 350},
                                  {DASH_LOOK_BREAK_STRETCH_REACH, 450}, {DASH_LOOK_BREAK_STRETCH_HOLD, 1000},
                                  {DASH_LOOK_BREAK_STRETCH_RECOVER, 400}, {DASH_LOOK_BREAK_STRETCH_STAND, 400}),
@@ -145,17 +145,16 @@ static void compose(int look, dash_cat_mood_t mood)
         int id = L->layer[i];
         if (id == DASH_SPR_BODY_WASH) face_dy = 2*SCALE;
         if (id == DASH_SPR_BODY_WINDOW || id == DASH_SPR_BODY_WINDOW_B) face_dx = -2*SCALE;
-        if (id == DASH_SPR_BODY_REST || id == DASH_SPR_BODY_REST_B ||
-            id == DASH_SPR_BODY_STRETCH || id == DASH_SPR_BODY_STRETCH_B) {
-            face_dx = -6*SCALE;
-            face_dy = 9*SCALE;
+        if (id == DASH_SPR_BODY_REST || id == DASH_SPR_BODY_REST_B) { /* loaf head = seated + (-4, +5) */
+            face_dx = -4*SCALE;
+            face_dy = 5*SCALE;
         }
         if (id == DASH_SPR_SIDE_BODY || id == DASH_SPR_SIDE_BODY_B) prop_dx = -3*SCALE;
     }
-    /* Keep alerts above a low head rather than down inside the torso. */
+    /* Alerts keep the same place relative to a moved head as when seated. */
     if (face_dx || face_dy) {
         prop_dx = face_dx;
-        prop_dy = face_dy > 2*SCALE ? 5*SCALE : face_dy;
+        prop_dy = face_dy;
     }
     for (int i = 0; i < L->n; ++i) {
         int id = L->layer[i];

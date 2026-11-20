@@ -123,8 +123,8 @@ def head(L, cx=16, cy=13.5, stripe_dy=0):
         L.pixels("d", [(int(cx) - 11, y), (int(cx) - 10, y), (int(cx) + 9, y), (int(cx) + 10, y)])
 
 
-def tail(L, pts):
-    L.stroke(pts, 1.5, "o", stripe="d", every=2)
+def tail(L, pts, r=1.5):
+    L.stroke(pts, r, "o", stripe="d", every=2)
 
 
 TAILS = {
@@ -175,15 +175,17 @@ def body_groom():
     return compose(L, paw)
 
 
-def body_window(tail_kind="a"):
+def body_window(flick=False, side=-1):
     """A room-sized rear view, facing the upper-left window, head still.
 
+    The tail leaves the base of the spine, lies on the floor toward us and
+    curls up on the left (side=-1, the user's choice); the flick frame only
+    lifts its tip. The user rejected a front-view tail curling up at the side.
     Pose reference: Octavi Navarro, Cat Cafe #01,
     https://x.com/OctaviNavarro/status/1093242223255322638
     This is Kiki's own geometry/palette; the outdoor back layers stay separate.
     """
     L = Layer()
-    tail(L, TAILS[tail_kind])
     L.ellipse(16.5, 24.5, 8.1, 6.8, "o")
     L.ellipse(12, 30, 2.4, 1.6, "o")
     L.ellipse(20, 30, 2.4, 1.6, "o")
@@ -201,8 +203,22 @@ def body_window(tail_kind="a"):
     # Merge the neck/head/body before outlining. No horizontal mark that
     # could look like a mouth on the back of the head.
     L.pixels("d", [(13, 18), (14, 19), (14, 20)])
+    L = L.shift(0, -1)                      # room under the hips for the tail's outline
+    b = 16.5
+    pts = [(b, 27.0), (b + 1.6 * side, 29.3), (b + 6 * side, 29.9), (b + 10 * side, 29.3),
+           (b + 11.6 * side, 27.4)]
+    pts += [(b + 11.4 * side, 24.6)] if flick else [(b + 12 * side, 26.0)]
+    T = Layer()
+    tail(T, pts, 1.3)
+    T.outline()
     L.outline()
-    L.pixels("k", [(16, 30), (16, 31)])
+    # The tail lies in front of the hips; no outline where it leaves the body.
+    for y in range(H):
+        for x in range(W):
+            t = T.g[y][x]
+            if t == "." or (t == "k" and math.hypot(x + 0.5 - b, y + 0.5 - 27.5) < 2.2):
+                continue
+            L.g[y][x] = t
     return L
 
 
@@ -220,43 +236,32 @@ def body_jump():
     return L
 
 
-def resting_head(L):
-    L.ellipse(10, 22.5, 7.6, 6.2, "o")
-    L.poly([(3.2, 20), (4.2, 12.5), (8.6, 17)], "o")
-    L.poly([(11.4, 17), (15.8, 12.5), (16.8, 20)], "o")
-    L.poly([(4.3, 18.3), (4.8, 14.6), (7.2, 17.2)], "p")
-    L.poly([(12.8, 17.2), (15.2, 14.6), (15.7, 18.3)], "p")
+# Lying poses are a big-head "loaf": the seated head, unchanged, moved by
+# (-4, +5) so the seated mood faces fit it exactly (dash_cat.c compose()).
+# The user rejected the earlier small-head, long-body lying poses.
+# Shape references: https://toffeecraft.itch.io/cat-sleeping-animation-free ,
+# https://luizmelo.itch.io/pet-cat-pack and https://brato.itch.io/bratos-pixel-cats
+LOAF = (12, 18.5)
 
 
-def body_sleep(breath=0.0, awake=False):
+def body_loaf(breath=0.0, sleep=False):
+    """Rest (awake, tail tip up behind the hip) and sleep (tail over the paws)."""
     L = Layer()
-    L.ellipse(18.5, 24.5 - breath / 2, 12.2, 6.3 + breath, "o")    # curled body
-    for x in (19, 22, 25, 28):                                     # back stripes
-        L.pixels("d", [(x, 19), (x, 20)])
-    resting_head(L)
-    if not awake:
-        L.ellipse(10, 25.4, 3.6, 2.0, "c")                         # preserve the existing sleep pose
-    L.stroke([(29, 26.5), (26, 29.6), (18, 30.4), (9, 30.2)], 1.3, "o", stripe="d", every=2)  # tail in front
+    if not sleep:
+        tail(L, [(27, 27), (29.6, 26), (30, 22.5), (28.6, 20.2)], 1.3)
+    L.ellipse(20.2, 24.9 - breath / 2, 10.2, 6.0 + breath / 2, "o")       # loaf
+    L.ellipse(12.5, 26.8, 7.6, 3.6, "o")                                   # chest under the chin
+    y = round(19.6 - breath / 2)
+    for x in (23, 26, 29):                                                 # back stripes
+        L.pixels("d", [(x, y), (x, y + 1)])
+    L.pixels("d", [(28, 24), (29, 25), (24, 23)])
+    head(L, *LOAF)
+    L.ellipse(8.4, 29.3, 2.4, 1.5, "c")                                    # tucked forepaws
+    L.ellipse(15.6, 29.3, 2.4, 1.5, "c")
+    if sleep:
+        tail(L, [(30, 25.5), (29, 29), (24, 30.2), (17, 30.4)], 1.3)
     L.outline()
-    return L
-
-
-def body_stretch(phase=0):
-    """A play bow, hips raised and front paws planted on the same floor."""
-    L = Layer()
-    tail(L, [(24, 23), (28, 20), (29, 15), (27, 13)])
-    L.ellipse(22, 22-phase*0.5, 7.5, 6.5, "o")
-    L.poly([(15, 22), (23, 22), (25, 29), (20, 30), (13, 27)], "o")
-    L.stroke([(16, 25), (10, 29), (5, 29.5)], 1.7, "o")
-    L.stroke([(19, 26), (14, 30), (9, 30)], 1.5, "o")
-    L.ellipse(5, 30, 2.5, 1.3, "c")
-    L.ellipse(10, 30.5, 2.5, 1, "c")
-    L.ellipse(24, 30, 2.6, 1.4, "c")
-    for x in (21, 24, 27):
-        L.pixels("d", [(x, 17-phase), (x, 18-phase)])
-    resting_head(L)
-    L.outline()
-    L.pixels("d", [(18, 26), (17, 27), (16, 28)])
+    L.pixels("k", [(12, 29), (12, 30)])                                    # gap between the paws
     return L
 
 
@@ -498,20 +503,21 @@ def face(kind, cx=16, cy=13.5):
         F.pixels("k", [(int(cx) - 2, int(cy) + 3), (int(cx) + 1, int(cy) + 3)])
         F.rect(int(cx) - 1, int(cy) + 3, int(cx), int(cy) + 5, "r")
         blush()
-    elif kind == "sleep_smile":
-        F.pixels("k", [(5, 23), (6, 22), (7, 22), (8, 23), (11, 23), (12, 22), (13, 22), (14, 23)])
-        F.pixels("p", [(9, 24), (10, 24), (4, 24), (15, 24)])
-    elif kind == "sleep_closed":   # for the curled pose (head at 10, 22.5)
-        F.pixels("k", [(5, 22), (6, 23), (7, 23), (8, 22), (11, 22), (12, 23), (13, 23), (14, 22)])
-        F.pixels("p", [(9, 24), (10, 24), (4, 24), (15, 24)])
-    elif kind in ("rest", "rest_blink"):
-        for ex in (6, 12):
-            F.pixels("k", [(ex, 22), (ex+1, 22)])
-            if kind == "rest":
-                F.set(ex, 23, "k")
-                F.set(ex, 22, "w")
-        F.pixels("p", [(9, 24), (10, 24)])
-        F.pixels("k", [(9, 26), (10, 26)])
+    elif kind in ("sleep_smile", "rest", "rest_blink"):   # loaf faces: nose a row higher
+        ic = int(cx)
+        if kind == "sleep_smile":   # ^ ^ in the sun
+            for ex in (ex_l, ex_r):
+                F.pixels("k", [(ex - 1, ey + 2), (ex, ey + 1), (ex + 1, ey + 1), (ex + 2, ey + 2)])
+            F.pixels("k", [(ic - 2, ey + 3), (ic - 1, ey + 4), (ic, ey + 4), (ic + 1, ey + 3)])
+        else:                       # relaxed half-lids, or shut on the blink
+            for ex in (ex_l, ex_r):
+                F.pixels("k", [(ex, ey), (ex + 1, ey)])
+                if kind == "rest":
+                    F.pixels("k", [(ex, ey + 1), (ex + 1, ey + 1)])
+                    F.set(ex, ey, "w")
+            F.pixels("k", [(ic - 1, ey + 4), (ic, ey + 4)])
+        F.pixels("p", [(ic - 1, ey + 2), (ic, ey + 2)])
+        F.pixels("p", [(ex_l - 3, ey + 3), (ex_l - 2, ey + 3), (ex_r + 3, ey + 3), (ex_r + 4, ey + 3)])
     elif kind in ("groom", "groom_lick"):
         for ex in (ex_l, ex_r):
             F.pixels("k", [(ex-1, 15), (ex, 16), (ex+1, 16), (ex+2, 15)])
@@ -565,8 +571,8 @@ def prop(kind):
         P.pixels("v", [(29, 1), (30, 2), (30, 3), (29, 4)])
         P.rect(26, 6, 27, 7, "v")
         P.set(28, 7, "v")
-    elif kind == "zzz":
-        for ox, oy, s in ((19, 12, 3), (24, 5, 4)):
+    elif kind == "zzz":      # clear of the loaf head's right ear
+        for ox, oy, s in ((22, 9, 3), (26, 2, 4)):
             P.rect(ox, oy, ox + s, oy, "B")
             P.rect(ox, oy + s, ox + s, oy + s, "B")
             for i in range(1, s):
@@ -601,7 +607,7 @@ def prop(kind):
         for x, y in ((27, 0), (31, 4), (23, 4), (27, 8), (24, 1), (30, 1), (24, 7), (30, 7)):
             P.set(x, y, "y")
     elif kind == "zzz_b":
-        for ox, oy, s in ((20, 10, 3), (25, 3, 4)):
+        for ox, oy, s in ((23, 7, 3), (27, 1, 4)):
             P.rect(ox, oy, ox + s, oy, "B")
             P.rect(ox, oy + s, ox + s, oy + s, "B")
             for i in range(1, s):
@@ -637,129 +643,83 @@ def compose(*layers):
     return out
 
 
-# A: approved side-flop study, reduced to the existing native grid and palette.
-# Pose references (shape only): https://toffeecraft.itch.io/cat-retro and
-# https://nekochan.jp/column/article/24459 . The face rotates with the shoulders.
-# These hand-finished grids keep the selected silhouette reproducible without
-# loading the concept image or adding an image-processing dependency to builds.
-PET_POSES = {
-    "lean": """
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-.............k..................
-............kok.................
-..........kkkpok................
-.....kk.kkodoook................
-....kookddodooook...............
-....kpoooooooooodk..............
-....kooooooooooook......kk......
-.....kooooookkkookkk...kook.....
-.....kookkookooookdokkk.kodk....
-.....kokkkooooookkooddokkook....
-.....kokooopoookkoooooodkdok....
-......koooookooccoooooookok.....
-.......kkkdoookccckoooodkdk.....
-.........kdkooocckodoooook......
-........kocckookkccokooook......
-.........kcccoocccckcccok.......
-..........kkkkkkkkk.kkkk........
-................................
-................................
-""".strip().splitlines(),
-    "belly": """
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-.........kk.....................
-........kopk....................
-........kopok...................
-......kkdooook..................
-.....kodooooook.................
-...kkkdoooookook.kk......kkk....
-..kppooooookooookcckkkkkkoook...
-..kopoooooookkokkcckodookkdok...
-...kooookookoookkcckcooookkok...
-...koookooooookkkkkcccoookkdk...
-....kdooooopokccckccccooookok...
-....kodokkookoccckcccccoocck....
-.....kkkokoooocckocccokkkcck....
-.......kkkodoookdoooooccckk.....
-..........kkkkk.kkkkkkkkk.......
-................................
-................................
-""".strip().splitlines(),
-    "rest": """
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-................................
-.........k......................
-........kok.....................
-.......kopok....................
-......kkooook....kkkk...........
-.....kddoooook.kkddookk..kkk....
-....kdodooooookdoodooookkoook...
-..kkoooooookkoocccoooooookkok...
-.kopoooooookokkccckooooookkook..
-..koooooooookokkccoccoooookkok..
-...koookkooooockkkccccoooddkdk..
-...koookkkopoccckocccckoddokk...
-....kookooookccckoccckccoodk....
-.....kdoooodoockdoookccckkk.....
-......kkkkkkkkk.kkkk.kkk........
-................................
-................................
-""".strip().splitlines(),
-}
+# Pet reaction: Kiki stays seated, tilts her head into the hand and smiles; a
+# heart floats up while she purrs. The user rejected lying-down belly-rub
+# versions (both the noisy native side-flop grids and a chibi flop).
+# Small tilts move each facial feature with the head but keep the eye/mouth
+# pixel patterns upright, which avoids rotation jaggies on the 32-px face.
+def rot(px, py, cx, cy, deg):
+    a = math.radians(deg)
+    dx, dy = px - cx, py - cy
+    return cx + dx * math.cos(a) - dy * math.sin(a), cy + dx * math.sin(a) + dy * math.cos(a)
 
 
-def body_pet(pose):
-    base = "belly" if pose == "side" else "rest" if pose == "rub" else pose
+def ellipse_rot(L, cx, cy, rx, ry, ch, deg):
+    a = math.radians(-deg)
+    for y in range(H):
+        for x in range(W):
+            dx, dy = x + 0.5 - cx, y + 0.5 - cy
+            u = dx * math.cos(a) - dy * math.sin(a)
+            v = dx * math.sin(a) + dy * math.cos(a)
+            if (u / rx) ** 2 + (v / ry) ** 2 <= 1.0:
+                L.g[y][x] = ch
+
+
+def head_tilt(L, cx, cy, deg):
+    """head() rotated about its centre; its stripe pixels are moved, not redrawn."""
+    R = lambda pts: [rot(px, py, cx, cy, deg) for px, py in pts]  # noqa: E731
+    L.poly(R([(cx - 10.5, cy - 3), (cx - 8, cy - 11), (cx - 3.5, cy - 7)]), "o")
+    L.poly(R([(cx + 10.5, cy - 3), (cx + 8, cy - 11), (cx + 3.5, cy - 7)]), "o")
+    ellipse_rot(L, cx, cy, 11, 8.3, "o", deg)
+    L.poly(R([(cx - 8.8, cy - 4.5), (cx - 7.8, cy - 9), (cx - 5.3, cy - 6.5)]), "p")
+    L.poly(R([(cx + 8.8, cy - 4.5), (cx + 7.8, cy - 9), (cx + 5.3, cy - 6.5)]), "p")
+    up = Layer()
+    head(up)                                   # upright reference at HEAD
+    for y in range(H):
+        for x in range(W):
+            if up.g[y][x] == "d":
+                px, py = rot(x + 0.5 - HEAD[0] + cx, y + 0.5 - HEAD[1] + cy, cx, cy, deg)
+                L.set(math.floor(px), math.floor(py), "d")
+
+
+# (x, y, colour) cells and the point each pattern is centred on
+G_HAPPY = ([(0, 1, "k"), (1, 0, "k"), (2, 0, "k"), (3, 1, "k")], (2, 1))      # ^
+G_SHUT = ([(0, 0, "k"), (1, 1, "k"), (2, 1, "k"), (3, 0, "k")], (2, 1))       # content, shut
+G_MOUTH = ([(1, 0, "p"), (2, 0, "p"), (0, 1, "k"), (1, 2, "k"), (2, 2, "k"), (3, 1, "k")], (2, 0.5))
+G_BLUSH = ([(0, 0, "p"), (1, 0, "p")], (1, 0.5))
+
+
+def glyph(L, g, at):
+    cells, (gx, gy) = g
+    ox, oy = round(at[0] - gx), round(at[1] - gy)
+    for x, y, ch in cells:
+        L.set(ox + x, oy + y, ch)
+
+
+def face_tilt(L, cx, cy, deg, eyes):
+    P = lambda dx, dy: rot(cx + dx, cy + dy, cx, cy, deg)  # noqa: E731
+    for s in (-1, 1):
+        glyph(L, eyes, P(5 * s, 0))
+        glyph(L, G_BLUSH, P(8 * s, 2.5))
+    glyph(L, G_MOUTH, P(0, 2.5))
+
+
+PET = {"tilt": (14.5, 14.5, -10, "a"), "nuzzle": (14.0, 15.0, -16, "b"), "purr": (14.5, 14.5, -10, "a")}
+
+
+def body_pet(kind):
+    """Seated, body leaning a little; head tilted (nuzzle: further and lower)."""
+    cx, cy, deg, tail_kind = PET[kind]
     L = Layer()
-    L.g = [list(row) for row in PET_POSES[base]]
-    if pose == "side":  # not fully rolled over yet; the far tummy is still orange
-        for y in range(24, 28):
-            for x in range(18, 21):
-                if L.get(x, y) == "c":
-                    L.set(x, y, "o")
-    elif pose == "rub":  # a tiny tail curl, keeping head/body/ground contact fixed
-        L.pixels("o", [(28, 23), (28, 24)])
-        L.pixels("d", [(28, 25)])
+    tail(L, TAILS[tail_kind])
+    ellipse_rot(L, 16.6, 25.2, 8.6, 6.4, "o", -8)
+    ellipse_rot(L, 16.0, 26.0, 4.6, 4.4, "c", -8)
+    head_tilt(L, cx, cy, deg)
+    L.ellipse(12, 30, 2.4, 1.5, "c")
+    L.ellipse(20, 30, 2.4, 1.5, "c")
+    L.outline()
+    L.pixels("k", [(16, 29), (16, 30), (15, 31), (17, 31)])
+    face_tilt(L, cx, cy, deg, G_SHUT if kind == "purr" else G_HAPPY)
     return L
 
 
@@ -769,18 +729,16 @@ SPRITES = {
     "body_hold": body_sit(arms_up=True),
     "body_wash": body_groom(),
     "body_window": body_window(),
-    "body_window_b": body_window("b"),
-    "body_rest": body_sleep(awake=True),
-    "body_rest_b": body_sleep(breath=0.6, awake=True),
-    "body_stretch": body_stretch(),
-    "body_stretch_b": body_stretch(1),
+    "body_window_b": body_window(flick=True),
+    "body_rest": body_loaf(),
+    "body_rest_b": body_loaf(breath=0.6),
     **{f"body_break_stretch_{p}": body_break_stretch(p) for p in BREAK_STRETCH},
-    **{f"body_pet_{p}": body_pet(p) for p in ("lean", "side", "belly", "rub", "rest")},
+    **{f"body_pet_{p}": body_pet(p) for p in PET},
     "body_puff": body_sit(puff=True),
     "body_jump": body_jump(),
     "body_jump_hi": body_jump().shift(0, -2),
-    "body_sleep": body_sleep(),
-    "body_sleep_b": body_sleep(breath=0.6),
+    "body_sleep": body_loaf(sleep=True),
+    "body_sleep_b": body_loaf(breath=0.6, sleep=True),
     "body_back": body_back(),
     "body_back_tail_mid": body_back(1),
     "body_back_tail_up": body_back(2),
@@ -793,13 +751,16 @@ SPRITES = {
                                       "confused", "chew", "chew_b", "meow", "focus", "lick")},
     "face_jump": face("happy", cy=12.5),
     "face_jump_hi": face("happy", cy=12.5).shift(0, -2),
-    "face_sleep_closed": face("sleep_closed"),
-    "face_sleep_smile": face("sleep_smile"),
-    **{f"face_{k}": face(k) for k in ("groom", "groom_lick", "rest", "rest_blink")},
+    "face_sleep_closed": face("sleepy", *LOAF),
+    "face_sleep_smile": face("sleep_smile", *LOAF),
+    "face_rest": face("rest", *LOAF),
+    "face_rest_blink": face("rest_blink", *LOAF),
+    **{f"face_{k}": face(k) for k in ("groom", "groom_lick")},
     **{f"prop_{k}": prop(k) for k in ("fish", "book", "book_b", "sign", "bowl",
                                       "rope_over", "rope_under", "yarn", "heart", "sun",
                                       "sweat", "bang", "question", "note", "zzz", "zzz_b", "confetti", "confetti_b")},
     "prop_yarn_b": prop("yarn").shift(-2, 0),
+    "prop_heart_up": prop("heart").shift(0, -2),
 }
 
 # What the state machine draws, as (label, layers...) -- also the review sheet.
@@ -829,11 +790,11 @@ LOOKS = [
     ("window tail", "body_window_b"),
     ("rest", "body_rest", "face_rest"), ("rest 2", "body_rest_b", "face_rest"),
     ("rest blink", "body_rest", "face_rest_blink"),
-    ("stretch", "body_stretch", "face_rest_blink"),
-    ("stretch 2", "body_stretch_b", "face_rest_blink"),
     ("drowsy", "body_sit", "face_sleepy"),
     ("yarn 2", "body_sit", "face_happy", "prop_yarn_b"),
-    *[(f"pet {p}", f"body_pet_{p}") for p in ("lean", "side", "belly", "rub", "rest")],
+    ("pet tilt", "body_pet_tilt"), ("pet nuzzle", "body_pet_nuzzle", "prop_heart"),
+    ("pet tilt 2", "body_pet_tilt", "prop_heart_up"), ("pet purr", "body_pet_purr", "prop_heart_up"),
+    ("pet purr 2", "body_pet_purr", "prop_heart"),
     *[(f"break stretch {p}", f"body_break_stretch_{p}") for p in BREAK_STRETCH],
 ]
 

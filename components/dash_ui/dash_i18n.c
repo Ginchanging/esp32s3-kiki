@@ -128,7 +128,6 @@ static const char *const table[S_COUNT][2] = {
     [S_IDLE_SIT] = {"Just daydreaming~", "坐着发会儿呆～"},
     [S_IDLE_WINDOW] = {"Looking outside~", "看看窗外～"},
     [S_IDLE_LIE] = {"Resting my paws~", "趴一会儿，歇歇爪～"},
-    [S_IDLE_STRETCH] = {"A little stretch~", "伸个懒腰～"},
     [S_IDLE_GROOM] = {"Tidying my paws~", "舔舔爪，理理毛～"},
     [S_IDLE_YAWN] = {"A tiny yawn~", "打个小哈欠～"},
     [S_IDLE_YARN] = {"A little yarn break~", "拨两下毛线球～"},

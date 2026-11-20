@@ -107,7 +107,7 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
 - **The scale never sends its weight to the device.** The S400 only exposes event entities. `MiHome.track_weighing()` stores absolute kg in `/var/lib/esp-dash/scale.json`, and the hub JSON carries relative values only (`d_last`, `d_30`, `hist`, in 0.1 kg). Never log weights.
 
 **Kiki** (`components/dash_ui/dash_cat.c`).
-- **Art workflow (user preference):** always look up online pose/animation references before drawing art. Produce viewable drafts with actual clickable PNG/GIF file links, wait for the user's selection, then integrate. Tool-internal image output alone has repeatedly been invisible in this client. For belly rubs the user selected A (gentle side flop): head tilts with shoulders and rests low, forepaws fold at the chest, limbs overlap naturally. Pose references: https://toffeecraft.itch.io/cat-retro and https://nekochan.jp/column/article/24459 . Native finished grids live in `cat_art.py`.
+- **Art workflow (user preference):** always look up online pose/animation references before drawing art. Produce viewable drafts with actual clickable PNG/GIF file links, wait for the user's selection, then integrate. Tool-internal image output alone has repeatedly been invisible in this client. The pet (knob/touch) reaction is a seated head-tilt smile with a floating heart (`body_pet_*`, `prop_heart_up`); the user rejected lying-down belly-rub versions (the noisy native side-flop grids and a chibi flop) and kept the bubble text. Tilted heads move each facial feature but keep eye/mouth pixel patterns upright.
 - Layer priority: reaction > mood > pomodoro > routine.
   - Reactions come from hub events and agent pushes.
   - Moods come from system health.
@@ -116,6 +116,8 @@ Flight tests: `python3 -m unittest discover -s server -p 'test_*.py'` and `ctest
 - Art source of truth: `scripts/cat_art.py`, which writes `assets/cat/*.txt` and the `LOOKS` table. `components/dash_ui/sprites/dash_sprites.c` is **generated**; don't edit it.
 - The user rejected a white muzzle patch, so `MUZZLE="none"` stays.
 - Coding/pomodoro-focus looks use `side_*` layers: Kiki in 3/4 view turned toward a laptop whose screen faces Kiki (the user rejected a laptop seen from behind, and a strict profile looked ugly). The face is baked into `side_body`, so mood faces don't swap there; `compose()` shifts mood props left for these looks. The Muse sign is held at the chest by both paws.
+- Lying looks (rest, nap/sleep, sunbathe) are a big-head loaf: the unchanged seated head at `LOAF` = seated + (-4, +5), so `compose()` shifts mood faces and props by exactly that. The user rejected the earlier small-head, long-body lying poses as clashing with Kiki's style. The idle play-bow stretch was removed at the user's request; the desk-break stretch (`break stretch`) is separate and stays.
+- The window rear view's tail leaves the base of the spine, lies on the floor toward the viewer and curls up on the left; the flick frame only lifts its tip. The user rejected a front-view tail curling up beside the body.
 
 **Overhead flights.** `FlightRadar` in `server/dashd.py` polls adsb.fi at 10 s and enriches
 reference routes on a separate worker via adsbdb. `/api/device/flights` uses the existing device

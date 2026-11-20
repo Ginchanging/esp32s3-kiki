@@ -6,7 +6,6 @@ typedef enum {
     DASH_IDLE_SIT = 0,
     DASH_IDLE_WINDOW,
     DASH_IDLE_LIE,
-    DASH_IDLE_STRETCH,
     DASH_IDLE_GROOM,
     DASH_IDLE_YAWN,
     DASH_IDLE_YARN,
