@@ -93,8 +93,8 @@ void dash_ui_pomo_week_restore(const dash_pomo_day_t in[DASH_DAYS]);
  * dash_ui_show_agent(). Counts come from st->days, pomodoros from the week above. */
 void dash_ui_diary_msg(const dash_state_t *st, int64_t now, bool weekly, dash_muse_msg_t *out);
 
-/* Rotary knob (EC11). TURN/CLICK follow the page; HOLD_TURN always pages.
- * LONG toggles pomodoro, emitted on release only when no rotation occurred. */
+/* Rotary knob (EC11). TURN and single CLICK follow the page; three quick CLICKs go home.
+ * HOLD_TURN always pages. LONG toggles pomodoro on release if there was no rotation. */
 typedef enum {
     DASH_KNOB_TURN = 0,
     DASH_KNOB_HOLD_TURN,

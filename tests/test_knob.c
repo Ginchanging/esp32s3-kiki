@@ -26,6 +26,26 @@ static void run(unsigned ms)
     for (unsigned i = 0; i < ms; i += 20) { ticks += 20; lv_timer_handler(); }
     lv_refr_now(NULL);
 }
+
+static void click(void)
+{
+    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    run(360);
+}
+
+static void triple_click(void)
+{
+    int page = dash_ui_get_page();
+    dash_tool_t tool = dash_ui_get_tool();
+    for (int i = 0; i < 2; ++i) {
+        dash_ui_knob(DASH_KNOB_CLICK, 0);
+        run(120);
+        assert(dash_ui_get_page() == page && dash_ui_get_tool() == tool);
+    }
+    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    assert(dash_ui_get_page() == DASH_PAGE_ROOM && dash_ui_get_tool() == DASH_TOOL_NONE);
+}
+
 static void update(void) { dash_ui_update(&state, utc); }
 static void duration_saved(int m) { ++duration_saves; saved_duration = m; }
 static void totals_saved(int n, int m, int day)
@@ -84,7 +104,7 @@ static void test_plug_lock(lv_display_t *display)
     int before = mi_requests;
     tap(197, 75);
     assert(find_label(lv_layer_top(), "Tap the lock first") && mi_requests == before);
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     assert(mi_requests == before);
     tap(156, 75);
     run(5100);
@@ -159,10 +179,10 @@ int main(void)
     dash_ui_knob(DASH_KNOB_HOLD_TURN, 8); assert(dash_ui_get_page() == DASH_PAGE_ROOM);
     dash_ui_set_page(DASH_PAGE_TOOLS, false);
     dash_ui_knob(DASH_KNOB_TURN, -1);
-    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_HEALTH);
-    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_NONE);
+    click(); assert(dash_ui_get_tool() == DASH_TOOL_HEALTH);
+    click(); assert(dash_ui_get_tool() == DASH_TOOL_NONE);
     dash_ui_knob(DASH_KNOB_TURN, 1);
-    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_POMODORO);
+    click(); assert(dash_ui_get_tool() == DASH_TOOL_POMODORO);
     dash_ui_pomo_duration_restore(27); update(); assert(text("Focus: 25 min"));
     dash_ui_knob(DASH_KNOB_TURN, INT_MIN); assert(text("Focus: 15 min"));
     dash_ui_knob(DASH_KNOB_TURN, INT_MAX); assert(text("Focus: 60 min"));
@@ -171,7 +191,7 @@ int main(void)
     dash_ui_knob(DASH_KNOB_TURN, 1); run(600); assert(duration_saves == 0);
     run(450); assert(duration_saves == 1 && saved_duration == 25);
     dash_ui_pomo_duration_restore(15); update();
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     uint8_t pct; assert(phase(&pct) == DASH_POMO_FOCUS && pct == 0);
     dash_ui_knob(DASH_KNOB_HOLD_TURN, 1);
     assert(dash_ui_get_page() == DASH_PAGE_MAIL && dash_ui_get_tool() == DASH_TOOL_NONE);
@@ -179,19 +199,19 @@ int main(void)
     dash_ui_open_tool(DASH_TOOL_POMODORO);
     dash_ui_knob(DASH_KNOB_TURN, 9);
     assert(text("Next focus: 60 min") && phase(&pct) == DASH_POMO_FOCUS && pct == 33);
-    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(phase(&pct) == DASH_POMO_PAUSED);
+    click(); assert(phase(&pct) == DASH_POMO_PAUSED);
     uint8_t paused = pct; ticks += 300000; update();
     assert(phase(&pct) == DASH_POMO_PAUSED && pct == paused);
     dash_ui_knob(DASH_KNOB_TURN, -9);
     dash_ui_set_lang(DASH_LANG_ZH); dash_ui_set_lang(DASH_LANG_EN);
     assert(dash_ui_get_tool() == DASH_TOOL_POMODORO);
     assert(text("Next focus: 15 min") && phase(&pct) == DASH_POMO_PAUSED && pct == paused);
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     ticks += 600000; update();
     assert(phase(&pct) == DASH_POMO_BREAK && saved_count == 1 && saved_minutes == 15);
     dash_ui_knob(DASH_KNOB_TURN, 9); assert(text("Next focus: 60 min"));
     ticks += 300001; update(); assert(phase(&pct) == DASH_POMO_IDLE);
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     ticks += 900000; update(); assert(phase(&pct) == DASH_POMO_FOCUS && pct == 25);
     dash_ui_set_page(1, false);
     dash_ui_knob(DASH_KNOB_LONG, 0); assert(phase(&pct) == DASH_POMO_PAUSED);
@@ -203,6 +223,12 @@ int main(void)
     snprintf(state.mi[0].id, sizeof(state.mi[0].id), "lamp");
     snprintf(state.mi[0].name_en, sizeof(state.mi[0].name_en), "Desk");
     dash_ui_set_mi_cb(mi_request); update(); dash_ui_set_page(5, false);
+    triple_click();
+    dash_ui_set_page(DASH_PAGE_MAIL, false);
+    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    dash_ui_set_page(DASH_PAGE_MI, false);
+    run(360);
+    assert(mi_requests == 0); /* Neither the triple-click nor the old page's click toggles the lamp. */
     dash_ui_knob(DASH_KNOB_TURN, 1); run(200);
     dash_ui_knob(DASH_KNOB_TURN, 2); run(200); assert(mi_requests == 0);
     run(300); assert(mi_requests == 1 && mi_on == 1 && mi_bri == 65);
@@ -216,7 +242,7 @@ int main(void)
     dash_ui_knob(DASH_KNOB_TURN, INT_MAX); run(600); assert(mi_bri == 100);
     dash_ui_knob(DASH_KNOB_TURN, INT_MIN); run(600); assert(mi_bri == 1);
     int before = mi_requests;
-    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(mi_requests == before+1 && mi_on == 0);
+    click(); assert(mi_requests == before+1 && mi_on == 0);
     state.mi[0].on = false;
     update();
     test_plug_lock(d);
@@ -278,7 +304,7 @@ int main(void)
     radar.link = DASH_SIT_LINK_STALE;
     dash_ui_set_sit_status(&radar);
     assert(text("Signal lost") && !text("No target"));
-    dash_ui_knob(DASH_KNOB_CLICK, 0); assert(dash_ui_get_tool() == DASH_TOOL_NONE);
+    click(); assert(dash_ui_get_tool() == DASH_TOOL_NONE);
 
     /* Four alternating runs, using capture times, not queue-drain times. */
     dash_ui_set_page(0, false); run(8000);
@@ -329,24 +355,49 @@ int main(void)
     state.runs[0] = state.runs[4];
     state.runs[4] = newer;
     update();
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     assert(action_query.run_id == 104);
     uint32_t stale = action_seq;
     dash_ui_knob(DASH_KNOB_HOLD_TURN, 1);
     assert(dash_ui_get_page() == 2 && !action_query.run_id);
     dash_ui_set_page(1, false);
     dash_ui_knob(DASH_KNOB_TURN, 1);
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     assert(action_query.run_id == 101);
     dash_action_page_t reply = {.count = 1, .total = 1, .items = {{.id = 99, .name = "Test job"}}};
     dash_ui_action_reply(stale, &reply);
     assert(text("Loading...") && !text("Test job"));
     dash_ui_action_reply(action_seq, &reply);
     assert(text("Test job"));
-    dash_ui_knob(DASH_KNOB_CLICK, 0);
+    click();
     assert(action_query.run_id == 101 && action_query.job_id == 99);
     dash_ui_set_lang(DASH_LANG_ZH);
     assert(!action_query.run_id && !text("Test job"));
+
+    click();
+    assert(action_query.run_id == 101);
+    triple_click();
+    assert(!action_query.run_id);
+    for (int page = DASH_PAGE_ROOM; page < DASH_UI_PAGES; ++page) {
+        dash_ui_set_page(page, false);
+        triple_click();
+    }
+    uint8_t pomo_phase = phase(&pct);
+    for (int tool = DASH_TOOL_POMODORO; tool < DASH_TOOL_COUNT; ++tool) {
+        dash_ui_open_tool((dash_tool_t)tool);
+        triple_click();
+    }
+    assert(phase(&pct) == pomo_phase);
+
+    dash_ui_set_page(DASH_PAGE_MAIL, false);
+    for (unsigned i = 0; i < 3; ++i)
+        dash_ui_knob_at(DASH_KNOB_CLICK, 0, ticks - (2 - i) * 400);
+    assert(dash_ui_get_page() == DASH_PAGE_MAIL);
+    run(360);
+    for (unsigned i = 0; i < 3; ++i)
+        dash_ui_knob_at(DASH_KNOB_CLICK, 0, ticks - (2 - i) * 250);
+    assert(dash_ui_get_page() == DASH_PAGE_ROOM); /* A backlogged queue still uses release times. */
+
     puts("knob button, context, timing, pomo accounting, lamp, scroll, selection and priority passed");
     return 0;
 }

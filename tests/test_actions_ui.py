@@ -20,6 +20,8 @@ with tempfile.TemporaryDirectory(prefix="kiki-actions-ui-") as temp:
     assert out.count("run=4 attempt=2 jobs=1 job=0 steps=0 rows=3 total=3") == 2, out
     assert "job=402 steps=1 rows=6 total=8" in out and "job=402 steps=2 rows=2 total=8" in out, out
     assert "tap x1 at 27,22  page 1 -> 1" in out, out
-    out = run("--knob", "turn:4;click;wait:80;click;wait:80;click;wait:80;turn:-9;click;hold:1")
+    out = run("--knob", "turn:4;click;wait:430;click;wait:430;click;wait:430;turn:-9;click;hold:1")
     assert out.count("run=6 attempt=1 jobs=1 job=0 steps=0 rows=1") == 2, out
     assert "job=601 steps=1 rows=2" in out, out
+    out = run("--knob", "turn:4;click;wait:120;click;wait:120;click", "--swipe", "wait:400")
+    assert "action query" not in out and "page=0 tool=none" in out, out

@@ -149,6 +149,7 @@ static struct {
 } pomo = {.focus_minutes = 25, .session_minutes = 25};
 
 static void knob_page_leave(void);
+static void knob_cancel_clicks(void);
 static void update_mihome(const dash_state_t *st);
 static void toast(const char *text);
 static void knob_rebuild(void);
@@ -643,6 +644,7 @@ static void show_tool_view(void)
 static void select_tool(dash_tool_t tool)
 {
     if (ui.tool == tool) return;
+    knob_cancel_clicks();
     ui.tool = tool;
     if (tool != DASH_TOOL_NONE) ui.tool_focus = tool;
     show_tool_view();
@@ -905,6 +907,7 @@ static lv_obj_t *action_card(lv_obj_t *parent, int x, int y, int w, int h)
 static void action_close(void)
 {
     if (!action.panel) return;
+    knob_cancel_clicks();
     lv_obj_delete(action.panel);
     action.panel = NULL;
     if (action_request_cb) action_request_cb(NULL);
@@ -1027,6 +1030,7 @@ static void action_activate(int control)
 
 static void action_clicked(lv_event_t *event)
 {
+    knob_cancel_clicks();
     action_activate((int)(intptr_t)lv_event_get_user_data(event));
 }
 
@@ -1094,6 +1098,7 @@ static void github_open(int index)
         index < 0 || index >= ui.last.run_count) return;
     const dash_run_t *run = &ui.last.runs[index];
     if (run->id <= 0 || run->attempt <= 0) return;
+    knob_cancel_clicks();
     github_focus(index, true);
     action.run = *run;
     action.query = (dash_action_query_t){.run_id = run->id, .attempt = run->attempt, .jobs_page = 1};
@@ -2591,6 +2596,7 @@ void dash_ui_update(const dash_state_t *st, int64_t now)
     if (ui.debug_night == 1) sky_now += (23 - ((sky_now + DASH_TZ_OFFSET_S)/3600)%24)*3600;
     dash_ota_ui_update(&st->ota);
     if (dash_ota_ui_active()) {
+        knob_cancel_clicks();
         sit_close();
         action_close();
         ui.wake_until = tick_now() + 10000;
@@ -2912,14 +2918,18 @@ void dash_ui_diary_msg(const dash_state_t *st, int64_t now, bool weekly, dash_mu
 
 /* ------------------------------------------------------------------ rotary knob */
 
+#define KNOB_CLICK_GAP_MS 350u
+
 static struct {
     lv_obj_t *toast;
-    lv_timer_t *toast_timer, *bri_timer;
+    lv_timer_t *toast_timer, *bri_timer, *click_timer;
     int bri_dev, bri;
     bool bri_active;
     uint32_t bri_last; /* lv tick of the last turn */
     int pet_dir, pet_runs;
     uint32_t pet_first, pet_last;
+    unsigned clicks;
+    uint32_t last_click;
 } knob = {.bri_dev = -1};
 
 static void toast_hide(lv_timer_t *t)
@@ -3031,8 +3041,18 @@ static void knob_bri_turn(int steps)
     toast(buf);
 }
 
+static void knob_cancel_clicks(void)
+{
+    if (knob.click_timer) {
+        lv_timer_delete(knob.click_timer);
+        knob.click_timer = NULL;
+    }
+    knob.clicks = 0;
+}
+
 static void knob_page_leave(void)
 {
+    knob_cancel_clicks();
     knob_bri_commit();
     knob.pet_runs = 0;
 }
@@ -3100,6 +3120,68 @@ static void pet_turn(int steps, uint32_t at_ms)
     }
 }
 
+static void knob_click(void)
+{
+    knob_bri_commit();
+    if (ui.page == DASH_PAGE_ROOM) {
+        if (!ui.popup && !dash_flight_ui_scene_active() && dash_cat_reacting() == DASH_CAT_REACT_NONE) {
+            dash_cat_react(DASH_CAT_REACT_TOUCH);
+            touch_report();
+        }
+        return;
+    }
+    if (ui.page == DASH_PAGE_GITHUB) {
+        if (action.panel) action_activate(action.focus);
+        else github_open(github_index(&ui.last, ui.gh_selected));
+        return;
+    }
+    if (ui.page == DASH_PAGE_TOOLS) {
+        if (ui.tool == DASH_TOOL_NONE) dash_ui_open_tool(ui.tool_focus);
+        else if (ui.tool == DASH_TOOL_POMODORO) dash_ui_pomo_toggle();
+        else select_tool(DASH_TOOL_NONE);
+        return;
+    }
+    if (ui.page != DASH_PAGE_MI) {
+        toast(dash_tr(ui.page == DASH_PAGE_MAIL ? S_KNOB_MAIL_HINT :
+                      ui.page == DASH_PAGE_FLIGHTS ? S_KNOB_FLIGHT_HINT : S_KNOB_PAGE_HINT));
+        return;
+    }
+    int i = knob_lamp();
+    if (i < 0) {
+        toast(dash_tr(S_KNOB_NO_LAMP));
+        return;
+    }
+    const dash_mi_dev_t *d = &ui.last.mi[i];
+    bool will_on = !d->on;
+    mi_toggle_t result = mi_toggle(i);
+    if (result == MI_TOGGLE_LOCKED) {
+        toast(dash_tr(S_MI_UNLOCK_FIRST));
+        return;
+    }
+    char buf[64];
+    if (result == MI_TOGGLE_SENT) {
+        snprintf(buf, sizeof(buf), dash_tr(S_KNOB_LAMP_FMT), mi_name(d), dash_tr(will_on ? S_MI_ON : S_MI_OFF));
+    } else {
+        snprintf(buf, sizeof(buf), dash_tr(S_KNOB_LAMP_FMT), mi_name(d),
+                 ui.mi_pend[i].active ? "..." : dash_tr(S_MI_OFFLINE));
+    }
+    toast(buf);
+}
+
+static void knob_flush_clicks(void)
+{
+    unsigned clicks = knob.clicks;
+    knob_cancel_clicks();
+    for (unsigned i = 0; i < clicks; ++i) knob_click();
+}
+
+static void knob_click_timeout(lv_timer_t *timer)
+{
+    (void)timer;
+    knob_flush_clicks();
+    if (ui.have_last) dash_ui_update(&ui.last, ui.last_now);
+}
+
 void dash_ui_knob(dash_knob_ev_t ev, int steps)
 {
     dash_ui_knob_at(ev, steps, tick_now());
@@ -3107,12 +3189,15 @@ void dash_ui_knob(dash_knob_ev_t ev, int steps)
 
 void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
 {
-    char buf[64];
     ui.wake_until = tick_now() + 30000; /* any knob use lights a dimmed night screen */
     if (ev != DASH_KNOB_TURN) knob.pet_runs = 0;
     if (dash_ota_ui_active()) {
         knob.pet_runs = 0;
         return;
+    }
+    /* Queued clicks can arrive together, so use their capture times. */
+    if (knob.clicks && (ev != DASH_KNOB_CLICK || at_ms - knob.last_click >= KNOB_CLICK_GAP_MS)) {
+        knob_flush_clicks();
     }
     switch (ev) {
     case DASH_KNOB_TURN:
@@ -3143,49 +3228,21 @@ void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
         knob_bri_commit();
         break;
     case DASH_KNOB_CLICK: {
-        knob_bri_commit();
-        if (ui.page == DASH_PAGE_ROOM) {
-            if (!ui.popup && !dash_flight_ui_scene_active() && dash_cat_reacting() == DASH_CAT_REACT_NONE) {
-                dash_cat_react(DASH_CAT_REACT_TOUCH);
-                touch_report();
-            }
+        if (++knob.clicks == 3) {
+            knob_cancel_clicks();
+            dash_ui_set_page(DASH_PAGE_ROOM, ui.page == DASH_PAGE_GITHUB);
             break;
         }
-        if (ui.page == DASH_PAGE_GITHUB) {
-            if (action.panel) action_activate(action.focus);
-            else github_open(github_index(&ui.last, ui.gh_selected));
-            break;
-        }
-        if (ui.page == DASH_PAGE_TOOLS) {
-            if (ui.tool == DASH_TOOL_NONE) dash_ui_open_tool(ui.tool_focus);
-            else if (ui.tool == DASH_TOOL_POMODORO) dash_ui_pomo_toggle();
-            else select_tool(DASH_TOOL_NONE);
-            break;
-        }
-        if (ui.page != DASH_PAGE_MI) {
-            toast(dash_tr(ui.page == DASH_PAGE_MAIL ? S_KNOB_MAIL_HINT :
-                          ui.page == DASH_PAGE_FLIGHTS ? S_KNOB_FLIGHT_HINT : S_KNOB_PAGE_HINT));
-            break;
-        }
-        int i = knob_lamp();
-        if (i < 0) {
-            toast(dash_tr(S_KNOB_NO_LAMP));
-            break;
-        }
-        const dash_mi_dev_t *d = &ui.last.mi[i];
-        bool will_on = !d->on;
-        mi_toggle_t result = mi_toggle(i);
-        if (result == MI_TOGGLE_LOCKED) {
-            toast(dash_tr(S_MI_UNLOCK_FIRST));
-            break;
-        }
-        if (result == MI_TOGGLE_SENT) {
-            snprintf(buf, sizeof(buf), dash_tr(S_KNOB_LAMP_FMT), mi_name(d), dash_tr(will_on ? S_MI_ON : S_MI_OFF));
+        knob.last_click = at_ms;
+        uint32_t age = tick_now() - at_ms;
+        uint32_t delay = age < KNOB_CLICK_GAP_MS ? KNOB_CLICK_GAP_MS - age : 1;
+        if (knob.click_timer) {
+            lv_timer_set_period(knob.click_timer, delay);
+            lv_timer_reset(knob.click_timer);
         } else {
-            snprintf(buf, sizeof(buf), dash_tr(S_KNOB_LAMP_FMT), mi_name(d),
-                     ui.mi_pend[i].active ? "..." : dash_tr(S_MI_OFFLINE));
+            knob.click_timer = lv_timer_create(knob_click_timeout, delay, NULL);
+            if (!knob.click_timer) knob_flush_clicks();
         }
-        toast(buf);
         break;
     }
     case DASH_KNOB_LONG: {
@@ -3195,6 +3252,7 @@ void dash_ui_knob_at(dash_knob_ev_t ev, int steps, uint32_t at_ms)
                           : pomo.phase == DASH_POMO_BREAK ? S_POMO_BREAK
                           : pomo.phase == DASH_POMO_PAUSED ? S_POMO_PAUSED
                                                            : S_POMO_IDLE;
+        char buf[64];
         snprintf(buf, sizeof(buf), dash_tr(S_KNOB_POMO_FMT), dash_tr(what));
         toast(buf);
         break;
